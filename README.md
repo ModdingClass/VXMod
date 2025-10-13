@@ -1,4 +1,4 @@
 # TK17-Custom-Bodies-plugin
-Armature and custom body editor for TK17
+VXMod is a Blender plugin to export Daz bodies to Unreal
 
-Requires Blender 2.79 
+Current builds Requires Good Old Blender 2.79 
