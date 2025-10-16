@@ -333,7 +333,7 @@ class EXPORT_PT_VXModToUnreal(bpy.types.Panel):
         row=box.row(align=True)
         row.operator('vxmod.fake',text='              ')
         row.operator('vxmod.fake',text='              ')
-        row.operator('vxmod.export_skeletalmesh_unreal',text='Export Unreal SkeletalMesh', icon='TIME')            
+        row.operator('vxmod.export_skeletalmesh_unreal',text='Export SKM_*', icon='TIME')            
         row=box.row()
         
         #row.separator()

@@ -917,33 +917,33 @@ def export_to_unreal_v2(params) : #exportfolderpath,
         bpy.ops.object.mode_set(mode='EDIT', toggle=False)
         ebones = armature_clone.data.edit_bones
         #
-        legLeftBones = ['hip_joint.L', 'knee_joint.L', 'hip_twist_joint.L']
-        legRightBones = ['hip_joint.R', 'knee_joint.R', 'hip_twist_joint.R']#, 'hip_twist_jointEnd.R']
-        ankleLeftBones=['ankle_joint.L']
-        ankleRightBones=['ankle_joint.R']
-        ballLeftBones=['ball_joint.L']
-        ballRightBones=['ball_joint.R']  
-        clavicleLeftBones =['clavicle_joint.L']
-        clavicleRightBones =['clavicle_joint.R']
-        armLeftBones = [ 'shoulder_joint.L', 'elbow_joint.L', 'shoulder_twist_joint.L', 'forearm_twist_joint.L']
-        armRightBones = [ 'shoulder_joint.R', 'elbow_joint.R', 'shoulder_twist_joint.R', 'forearm_twist_joint.R']
-        handLeftBones = [ 'wrist_joint.L']
-        handRightBones = [ 'wrist_joint.R']
+        legLeftBones = ['thigh.L', 'calf.L', 'thigh_twist_01.L','thigh_twist_02.L']
+        legRightBones = ['thigh.R', 'calf.R', 'thigh_twist_01.R','thigh_twist_02.R']#, 'hip_twist_jointEnd.R']
+        ankleLeftBones=['foot.L']
+        ankleRightBones=['foot.R']
+        ballLeftBones=['ball.L']
+        ballRightBones=['ball.R']  
+        clavicleLeftBones =['clavicle.L']
+        clavicleRightBones =['clavicle.R']
+        armLeftBones = [ 'upperarm.L', 'lowerarm.L', 'upperarm_twist_01.L', 'upperarm_twist_02.L', 'lowerarm_twist_01.L', 'lowerarm_twist_02.L']
+        armRightBones = [ 'upperarm.R', 'lowerarm.R', 'upperarm_twist_01.R','upperarm_twist_02.R', 'lowerarm_twist_01.R', 'lowerarm_twist_02.R']
+        handLeftBones = [ 'hand.L']
+        handRightBones = [ 'hand.R']
         fingerLeftBones=[
-                            'finger02_joint01.L','finger02_joint02.L','finger02_joint03.L','finger02_joint04.L',
-                            'finger03_joint01.L','finger03_joint02.L','finger03_joint03.L','finger03_joint04.L',
-                            'finger04_joint01.L','finger04_joint02.L','finger04_joint03.L','finger04_joint04.L',
-                            'finger05_joint01.L','finger05_joint02.L','finger05_joint03.L','finger05_joint04.L',
-                            'finger01_joint01.L','finger01_joint02.L','finger01_joint03.L'
+                            'index_metacarpal.L','index_01.L','index_02.L','index_03.L',
+                            'middle_metacarpal.L','middle_01.L','middle_02.L','middle_03.L',
+                            'ring_metacarpal.L','ring_01.L','ring_02.L','ring_03.L',
+                            'pinky_metacarpal.L','pinky_01.L','pinky_02.L','pinky_03.L',
+                            'thumb_01.L','thumb_02.L','thumb_03.L'
         ]
         breastLeftBones = ['breast_scale_joint.L','breast_joint01.L','breast_joint02.L','breast_nipple_joint.L','breast_nipple_jointEnd.L']
         breastRightBones = ['breast_scale_joint.R','breast_joint01.R','breast_joint02.R','breast_nipple_joint.R','breast_nipple_jointEnd.R']
         #
-        spineBones = ['spine_joint01', 'spine_joint02', 'spine_joint03', 'spine_joint04', 'spine_jointEnd', 'neck_joint01', 'neck_jointEnd', 'head_joint01', 'head_joint02', 'head_jointEnd']
+        spineBones = ['spine_01', 'spine_02', 'spine_03', 'spine_04', 'spine_05', 'neck_01', 'neck_02', 'head', 'head_jointEnd']
         #
         rootBones = ['base'] 
         rootBones = []
-        pelvisBones = ['pelvis_joint'] 
+        pelvisBones = ['pelvis'] 
         #
         # very important, we need to set the pivot center for rotation/scaling, otherwise we get strange results in armature orientation
         # it seems we need to go with individual origins or 3d cursor as a pivot point
