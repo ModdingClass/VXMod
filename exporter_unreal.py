@@ -69,6 +69,43 @@ def operator_exists(idname):
     except:
         return False
 
+
+def get_geograft_children(parent_obj):
+    """
+    Return a sorted list of all child meshes of parent_obj
+    whose names match 'geograft_<number>_'.
+    Sorted numerically by <number>.
+    """
+    pattern = re.compile(r"^geograft_(\d+)_")
+    matched_children = []
+
+    for child in parent_obj.children:
+        if child.type != 'MESH':
+            continue
+
+        match = pattern.match(child.name)
+        if match:
+            index = int(match.group(1))
+            matched_children.append((index, child))
+
+    # Sort by the numeric index
+    matched_children.sort(key=lambda x: x[0])
+
+    # Return only the sorted child objects
+    return [child for _, child in matched_children]
+
+
+def get_refined_geograft_names(geograft_children):
+    """Return a list of names after removing 'geograft_<number>_' from each object's name."""
+    pattern = re.compile(r"^geograft_\d+_")
+    refined = []
+
+    for obj in geograft_children:
+        new_name = pattern.sub("", obj.name)
+        refined.append(new_name)
+
+    return refined
+
 def create_vertex_groups_dict(obj):
     # ensure we got the latest assignments and weights
     obj.update_from_editmode()
@@ -215,25 +252,25 @@ def duplicate_object_by_name(sourceObjectName=None, newObjectName=None):
     return new_object
 
 
-# this function is supposed to take the base res body_subdiv_cage and make 2 duplicates
+# this function is supposed to take the base res mesh (or body) and make 2 duplicates
 # hires from edit mode subdivide operator - vertices from 0 .. 18119 are coming from the base (unsubdivided) mesh
 # hires from object mode subsurf modifier
 # lookup table from operator to modifier is created and saved to json file as a dictionary of key:val pairs
 def build_subdivision_vertex_matching_table(params) : 
-    # a ton of boilerplate checks comes next
-    if bpy.data.objects.get("body_subdiv_cage") is None:
-        ShowMessageBox("Can't find object: body_subdiv_cage", "Error", 'ERROR')
+    obj = bpy.context.active_object
+    if not obj or obj.type != 'MESH':
+        ShowMessageBox("No mesh object selected for export.", "Error", 'ERROR')
         return None
 
-    if bpy.data.objects["body_subdiv_cage"].hide :
-        ShowMessageBox("'body_subdiv_cage' object is not visible!", "Error", 'ERROR')
+    if obj.hide :
+        ShowMessageBox("Object {} is not visible!".format(obj.name), "Error", 'ERROR')
         return None
 
-    armature_modifier = next((mod for mod in bpy.data.objects["body_subdiv_cage"].modifiers if mod.type == 'ARMATURE'), None)
+    armature_modifier = next((mod for mod in obj.modifiers if mod.type == 'ARMATURE'), None)
     armature_object = armature_modifier.object if armature_modifier else None
 
     if armature_object is None:
-        ShowMessageBox("'body_subdiv_cage' object has no armature!", "Error", 'ERROR')
+        ShowMessageBox("Object {} has no armature!".format(obj.name), "Error", 'ERROR')
         return None        
     armature_object.hide = False
     
@@ -244,12 +281,13 @@ def build_subdivision_vertex_matching_table(params) :
     hiddenStatusGeografts = {}
     mergeGeografts = []
     anatomies = []
-    ob = bpy.data.objects["body_subdiv_cage"]
-    mergedMeshesName = ob.name
-    ob.select = True
-    bpy.context.scene.objects.active = ob
+    
+    mergedMeshesName = obj.name
+    obj.select = True
+    bpy.context.scene.objects.active = obj
     
     if not params.includeGeograftsOnExportUnreal:
+        mergedMeshesName = obj.name
         pass
     else:
         if ( operator_exists("daz.merge_geografts_fast") or operator_exists("daz.merge_geografts") or operator_exists("daz.merge_geografts_nondestructive")):
@@ -257,62 +295,48 @@ def build_subdivision_vertex_matching_table(params) :
         else:
             ShowMessageBox("'Include Geografts' is checked, but can't find `modded` Difeomorphic addon for Blender", "Error", 'ERROR')
             return None
-        if ob.data.get("mergeGeografts") is None:
-                ShowMessageBox("'Include Geografts' is checked, but you are missing 'mergeGeografts' property in data block Custom Properties", "Error", 'ERROR')
-                return None
-        if len(ob.data["mergeGeografts"].strip()) == 0 :
-                ShowMessageBox("'Include Geografts' is checked, but empty 'mergeGeografts' in data block Custom Properties", "Error", 'ERROR')
-                return None
-        mergeGeografts = ob.data["mergeGeografts"].split(",")
-        if len(mergeGeografts)==0:
-            ShowMessageBox("'Include Geografts' is checked, but empty 'mergeGeografts' in data block Custom Properties", "Error", 'ERROR')
+        #        
+        geograft_children = get_geograft_children(obj)
+        if len(geograft_children)==0:
+            ShowMessageBox("'Include Geografts' is checked, but there are no geograft_ children for the exported mesh", "Error", 'ERROR')
             return None
         else:
-            for geo in mergeGeografts:
-                ob = bpy.data.objects.get(geo)
-                if ob is None:
-                    ShowMessageBox("'Include Geografts' is checked, but the object with name: "+geo+" is missing", "Error", 'ERROR')    
-                    return None
-                if ob.type != 'MESH':
-                    ShowMessageBox("'Include Geografts' is checked, but the object with name: "+geo+" is not a Mesh type", "Error", 'ERROR')    
-                    return None       
-                hiddenStatusGeografts[ob.name] = ob.hide      
-                if ob.hide :
-                    ob.hide = False # we need to show it
-                    #ShowMessageBox("Geograft object '"+ ob.name +"' is not visible!", "Error", 'ERROR')
-                    #return None                
-        mergedMeshesName = "_".join(["body_subdiv_cage"] +mergeGeografts)
-    ob = bpy.data.objects["body_subdiv_cage"]
-    ob.select = True
-    bpy.context.scene.objects.active = ob
+            for geograftObj in geograft_children:
+                hiddenStatusGeografts[geograftObj.name] = geograftObj.hide      
+                if geograftObj.hide :
+                    geograftObj.hide = False # we need to show it, otherwise can't merge using a hidden object
+        geograft_refined = get_refined_geograft_names(geograft_children)
+        mergedMeshesName = "_".join([obj.name] +geograft_refined)
+    #
+    obj.select = True
+    bpy.context.scene.objects.active = obj
     bpy.ops.object.duplicate(linked=False)
-    fbody = bpy.context.scene.objects.active
-    fbody.name = "fbody_base_res"
+    vxasset = bpy.context.scene.objects.active
+    vxasset.name = "vxasset_base_res"
     
     if params.includeGeograftsOnExportUnreal:
         print("includeGeograftsOnExportUnreal is ON")
         #deselect_all_objects()       
         #
         #
-        for geo in mergeGeografts:
+        for geograftObj in geograft_children:
             deselect_all_objects()
-            ob = bpy.data.objects[geo]
-            ob.select = True
-            bpy.context.scene.objects.active = ob
+            geograftObj.select = True
+            bpy.context.scene.objects.active = geograftObj
             bpy.ops.object.duplicate(linked=False)
             geoClone = bpy.context.scene.objects.active
-            geoClone.parent = fbody
+            geoClone.parent = vxasset
             anatomies.append(geoClone)
-            bpy.data.objects[geo].hide = hiddenStatusGeografts[ob.name] # we need to restore the hidden status
+            geograftObj.hide = hiddenStatusGeografts[geograftObj.name] # we need to restore the hidden status
         #
         deselect_all_objects()
         #
         for geo in anatomies:
             geo.select = True
             bpy.context.scene.objects.active = geo        
-        fbody.select=True
-        bpy.context.scene.objects.active = fbody
-        fbody.select=True
+        vxasset.select=True
+        bpy.context.scene.objects.active = vxasset
+        vxasset.select=True
         if ( operator_exists("daz.merge_geografts_nondestructive") ):
             print("daz.merge_geografts_nondestructive is available :)")
             bpy.ops.daz.merge_geografts_nondestructive()        
@@ -325,43 +349,43 @@ def build_subdivision_vertex_matching_table(params) :
     
     
     deselect_all_objects()
-    fbody.select=True
-    bpy.context.scene.objects.active = fbody
-    #remove everything that is not required from fbody
-    bpy.ops.object.strip_and_clean(vg=True, sk=True, mod=True)
+    vxasset.select=True
+    bpy.context.scene.objects.active = vxasset
+    #remove everything that is not required from vxasset
+    bpy.ops.gmtt.object_strip_and_clean(vg=True, sk=True, mod=True)
     #
     bpy.ops.object.mode_set(mode='OBJECT')
     #
     # Clear existing vertex groups
-    #fbody.vertex_groups.clear()
+    #vxasset.vertex_groups.clear()
     #
     # Iterate over all vertices in the mesh
-    for i, vertex in enumerate(fbody.data.vertices):
+    for i, vertex in enumerate(vxasset.data.vertices):
         # Create a new vertex group named after the vertex index
-        vg = fbody.vertex_groups.new(name=str(i))
+        vg = vxasset.vertex_groups.new(name=str(i))
         #
         # Add the vertex to the group with a weight of 1.0
         vg.add([i], 1.0, 'ADD')
         #
-    print("Assigned weights to all fbody vertices.")    
+    print("Assigned weights to all vxasset vertices.")    
     #
     #
-    ob = bpy.context.scene.objects.active
-    print("Creating fbody_hires!") 
-    fbody_hires = duplicate_object_by_name("fbody_base_res","fbody_from_objmode_subsurf_modifier")
-    bpy.context.scene.objects.active = fbody_hires
+    obj = bpy.context.scene.objects.active
+    print("Creating vxasset_hires!") 
+    vxasset_hires = duplicate_object_by_name("vxasset_base_res","vxasset_from_objmode_subsurf_modifier")
+    bpy.context.scene.objects.active = vxasset_hires
     #first lets remove all shapekeys and existing modifiers
-    bpy.ops.object.strip_and_clean(sk=True, mod=True)
+    bpy.ops.gmtt.object_strip_and_clean(sk=True, mod=True)
     # Add a Subdivision Surface modifier
     bpy.ops.object.modifier_add(type='SUBSURF')
-    subsurf_modifier = fbody_hires.modifiers[-1] # get the last modifier (hence -1)
+    subsurf_modifier = vxasset_hires.modifiers[-1] # get the last modifier (hence -1)
     subsurf_modifier.levels = 1  # Set the subdivision levels as needed
     # Apply the Subdivision Surface modifier
     bpy.ops.object.modifier_apply( modifier = subsurf_modifier.name )
     #
-    fbody.select = True 
+    vxasset.select = True 
     #
-    bpy.context.scene.objects.active = fbody
+    bpy.context.scene.objects.active = vxasset
     # Switch to Edit Mode
     bpy.ops.object.mode_set(mode='EDIT')
     # Select all vertices
@@ -370,20 +394,20 @@ def build_subdivision_vertex_matching_table(params) :
     bpy.ops.mesh.subdivide()
     # Switch back to Object Mode (optional)
     bpy.ops.object.mode_set(mode='OBJECT')
-    fbody.name = "fbody_from_editmode_subdivide_operator"
+    vxasset.name = "vxasset_from_editmode_subdivide_operator"
     #
     deselect_all_objects()
-    # lets create the lookup dict for fbody (subdiv operator in edit mode)
-    fbody.select = True        
+    # lets create the lookup dict for vxasset (subdiv operator in edit mode)
+    vxasset.select = True        
     #
-    bpy.context.scene.objects.active = fbody
+    bpy.context.scene.objects.active = vxasset
     #
     vertex_groups_dict = {}
     # Ensure the object exists and is a mesh
-    if fbody and fbody.type == 'MESH':
+    if vxasset and vxasset.type == 'MESH':
         # Initialize an empty dictionary to store vertex groups for each vertex
         # Loop through all vertices in the mesh
-        for vertex in fbody.data.vertices:
+        for vertex in vxasset.data.vertices:
             # List to store the vertex group indices for the current vertex
             group_indices = []
             # Loop through the vertex groups assigned to the vertex
@@ -472,31 +496,31 @@ def build_subdivision_vertex_matching_table(params) :
                 entry["adjacent_faces_base_indices"] = edge_to_face_bases.get(key, [])                 
             #
         #
-        file_path = os.path.join(exportfolderpath,"fbody_vertex_mapping_list.json")
+        file_path = os.path.join(exportfolderpath,mergedMeshesName+"_vertex_mapping_list.json")
         # Write to file with arrays forced inline
         with open(file_path, 'w') as json_file:
             json_file.write(dumps_inline_arrays(mapping_list))
         # with open(file_path, 'w') as json_file:
         #     json.dump(mapping_list, json_file, indent=2)
         #
-        file_path = os.path.join(exportfolderpath,"fbody_vertex_groups_dict.json")
+        file_path = os.path.join(exportfolderpath,mergedMeshesName+"_vertex_groups_dict.json")
         # Save the lookup table to a JSON file
         with open(file_path, 'w') as json_file:
             json.dump(vertex_groups_dict, json_file)
     else:
         print("The specified object either does not exist or is not a mesh.")
-    # lets create the lookup dict for fbody_hires (subsurf modifier)
+    # lets create the lookup dict for vxasset_hires (subsurf modifier)
     deselect_all_objects()
-    fbody_hires.select = True        
+    vxasset_hires.select = True        
     #
-    bpy.context.scene.objects.active = fbody_hires
+    bpy.context.scene.objects.active = vxasset_hires
     #
     vertex_groups_dict_backwards = {}
     # Ensure the object exists and is a mesh
-    if fbody_hires and fbody_hires.type == 'MESH':
+    if vxasset_hires and vxasset_hires.type == 'MESH':
         # Initialize an empty dictionary to store vertex groups for each vertex\
         # Loop through all vertices in the mesh
-        for vertex in fbody_hires.data.vertices:
+        for vertex in vxasset_hires.data.vertices:
             # List to store the vertex group indices for the current vertex
             group_indices = []
             # Loop through the vertex groups assigned to the vertex
@@ -514,46 +538,50 @@ def build_subdivision_vertex_matching_table(params) :
     #
     deselect_all_objects()
     # lets create the final matching lookup dict 
-    fbody.select = True        
+    vxasset.select = True        
     #
-    bpy.context.scene.objects.active = fbody
+    bpy.context.scene.objects.active = vxasset
     # Ensure the object exists and is a mesh
-    if fbody and fbody.type == 'MESH':
-        fbody_matching_index_dict = OrderedDict()
+    if vxasset and vxasset.type == 'MESH':
+        vxasset_matching_index_dict = OrderedDict()
         # Loop through all vertices in the mesh
-        for vertex in fbody.data.vertices:
-            fbody_matching_index_dict[vertex.index]=vertex_groups_dict_backwards[vertex_groups_dict[vertex.index]]
+        for vertex in vxasset.data.vertices:
+            vxasset_matching_index_dict[vertex.index]=vertex_groups_dict_backwards[vertex_groups_dict[vertex.index]]
         # Convert dictionary to a JSON string
-        dict_as_string = json.dumps(fbody_matching_index_dict)
+        dict_as_string = json.dumps(vxasset_matching_index_dict)
         # Store it in the Scene's custom properties
         #or maybe not?!?!
-        #bpy.context.scene['my_global_fbody_matching_index_dict'] = dict_as_string
+        #bpy.context.scene['my_global_vxasset_matching_index_dict'] = dict_as_string
         # Specify the file path where you want to save the JSON file
         # Make sure you have permission to write to this location
         file_path = os.path.join(exportfolderpath,mergedMeshesName+"_matching_index_dict.json")
         # Save the lookup table to a JSON file
         with open(file_path, 'w') as json_file:
-            json.dump(fbody_matching_index_dict, json_file)
+            json.dump(vxasset_matching_index_dict, json_file)
         print("Lookup table saved to:", file_path)
     
     deselect_all_objects()
     if params.cleanupTempMeshesMode=='AFTER' or params.cleanupTempMeshesMode=='BOTH':
-        fbody.select = True        
-        bpy.context.scene.objects.active = fbody
-        fbody_hires.select = True        
-        bpy.context.scene.objects.active = fbody_hires        
+        vxasset.select = True        
+        bpy.context.scene.objects.active = vxasset
+        vxasset_hires.select = True        
+        bpy.context.scene.objects.active = vxasset_hires        
         bpy.ops.object.delete(use_global=True)   
     #
     deselect_all_objects()
 
 
-
-def load_fbody_matching_index_dict_from_json(exportfolderpath, includeGeograftsOnExportUnreal) : 
+def load_subdivision_vertex_matching_table(params) : 
     #
-    #if 'my_global_fbody_matching_index_dict' in bpy.context.scene:
-    #    stored_string = bpy.context.scene['my_global_fbody_matching_index_dict']
+    obj = bpy.context.active_object
+    if not obj or obj.type != 'MESH':
+        ShowMessageBox("No mesh object selected.", "Error", 'ERROR')
+        return None
+    exportfolderpath = os.path.join(params.exportFolderPathUnreal,"")    
+    if not os.path.exists(exportfolderpath):
+        os.makedirs(exportfolderpath)    
     # Load the JSON data from the file
-    file_path = os.path.join(exportfolderpath,"fbody_matching_index_dict.json")
+    file_path = os.path.join(exportfolderpath,"{}_matching_index_dict.json".format(obj.name))
     with open(file_path, 'r') as json_file:
         loaded_dict = json.load(json_file)
     # Convert the keys back to integers
@@ -562,6 +590,7 @@ def load_fbody_matching_index_dict_from_json(exportfolderpath, includeGeograftsO
     loaded_ordered_dict = OrderedDict(int_key_dict)
     print(loaded_ordered_dict)  # Output: {'a': 1, 'b': 2, 'c': 3}
     print("Dictionary size: {} ".format(len(loaded_ordered_dict)))
+    deselect_all_objects()
     #
 
 
@@ -569,21 +598,24 @@ def load_fbody_matching_index_dict_from_json(exportfolderpath, includeGeograftsO
 def export_to_unreal_v2(params) : #exportfolderpath,
     #exportfolderpath,exportFilename, includeGeograftsOnExportUnreal, cleanTempMeshesAfterExportUnreal, reorientBonesOnExportUnreal
     #
-    # a ton of boilerplate checks comes next
-    if bpy.data.objects.get("body_subdiv_cage") is None:
-        ShowMessageBox("Can't find object: body_subdiv_cage", "Error", 'ERROR')
+    obj = bpy.context.active_object
+    if not obj or obj.type != 'MESH':
+        ShowMessageBox("No mesh object selected for export.", "Error", 'ERROR')
         return None
 
-    if bpy.data.objects["body_subdiv_cage"].hide :
-        ShowMessageBox("'body_subdiv_cage' object is not visible!", "Error", 'ERROR')
+    if obj.hide :
+        ShowMessageBox("Object {} is not visible!".format(obj.name), "Error", 'ERROR')
         return None
 
-    armature_modifier = next((mod for mod in bpy.data.objects["body_subdiv_cage"].modifiers if mod.type == 'ARMATURE'), None)
+
+
+    armature_modifier = next((mod for mod in obj.modifiers if mod.type == 'ARMATURE'), None)
     armature_object = armature_modifier.object if armature_modifier else None
 
     if armature_object is None:
-        ShowMessageBox("'body_subdiv_cage' object has no armature!", "Error", 'ERROR')
-        return None        
+        ShowMessageBox("Object {} has no armature!".format(obj.name), "Error", 'ERROR')
+        return None    
+    #    
     # lets make sure we are in object mode
     obj = bpy.context.active_object
     if obj is not None:
@@ -592,12 +624,12 @@ def export_to_unreal_v2(params) : #exportfolderpath,
     deselect_all_objects()
     #
     if params.cleanupTempMeshesMode =="BEFORE" or params.cleanupTempMeshesMode =="BOTH":
-        fbody_stripped = bpy.data.objects.get("fbody_stripped")
-        if fbody_stripped is not None:
-            fbody_stripped.select=True
-            bpy.context.scene.objects.active = fbody_stripped
+        vxasset_stripped = bpy.data.objects.get("vxasset_stripped")
+        if vxasset_stripped is not None:
+            vxasset_stripped.select=True
+            bpy.context.scene.objects.active = vxasset_stripped
         #
-        emptyLodGroup = bpy.data.objects.get("fbodyLodGroup")
+        emptyLodGroup = bpy.data.objects.get("vxassetLodGroup")
         if emptyLodGroup is not None:
             emptyLodGroup.select=True
             #
@@ -617,13 +649,7 @@ def export_to_unreal_v2(params) : #exportfolderpath,
             if armature_from_first_emptyLodGroup is not None:
                 armature_from_first_emptyLodGroup.select=True
                 bpy.context.scene.objects.active = armature_from_first_emptyLodGroup        
-        #
-        #armature_modifier = next((mod for mod in bpy.data.objects["body_subdiv_cage"].modifiers if mod.type == 'ARMATURE'), None)
-        #armature_object = armature_modifier.object if armature_modifier else None
-        #fbody_hires.select=True
-        #fbody.select=True
-        #armature_clone.select=True
-        #bpy.context.scene.objects.active = armature_clone        
+        #    
         bpy.ops.object.delete(use_global=True)   
         #
     deselect_all_objects()            
@@ -641,13 +667,12 @@ def export_to_unreal_v2(params) : #exportfolderpath,
     hiddenStatusGeografts = {}
     mergeGeografts = []
     anatomies = []
-    ob = bpy.data.objects["body_subdiv_cage"]
-    mergedMeshesName = ob.name
-    ob.select = True
-    bpy.context.scene.objects.active = ob
+    mergedMeshesName = obj.name
+    obj.select = True
+    bpy.context.scene.objects.active = obj
     #
     if not params.includeGeograftsOnExportUnreal:
-        mergedMeshesName = "body_subdiv_cage"
+        mergedMeshesName = obj.name
         pass
     else:
         if ( operator_exists("daz.merge_geografts_fast") or operator_exists("daz.merge_geografts") or operator_exists("daz.merge_geografts_nondestructive")):
@@ -655,31 +680,18 @@ def export_to_unreal_v2(params) : #exportfolderpath,
         else:
             ShowMessageBox("'Include Geografts' is checked, but can't find `modded` Difeomorphic addon for Blender", "Error", 'ERROR')
             return None
-        if ob.data.get("mergeGeografts") is None:
-                ShowMessageBox("'Include Geografts' is checked, but you are missing 'mergeGeografts' property in data block Custom Properties", "Error", 'ERROR')
-                return None
-        if len(ob.data["mergeGeografts"].strip()) == 0 :
-                ShowMessageBox("'Include Geografts' is checked, but empty 'mergeGeografts' in data block Custom Properties", "Error", 'ERROR')
-                return None
-        mergeGeografts = ob.data["mergeGeografts"].split(",")
-        if len(mergeGeografts)==0:
-            ShowMessageBox("'Include Geografts' is checked, but empty 'mergeGeografts' in data block Custom Properties", "Error", 'ERROR')
+        #        
+        geograft_children = get_geograft_children(obj)
+        if len(geograft_children)==0:
+            ShowMessageBox("'Include Geografts' is checked, but there are no geograft_ children for the exported mesh", "Error", 'ERROR')
             return None
         else:
-            for geoName in mergeGeografts:
-                ob = bpy.data.objects.get(geoName)
-                if ob is None:
-                    ShowMessageBox("'Include Geografts' is checked, but the object with name: "+geoName+" is missing", "Error", 'ERROR')    
-                    return None
-                if ob.type != 'MESH':
-                    ShowMessageBox("'Include Geografts' is checked, but the object with name: "+geoName+" is not a Mesh type", "Error", 'ERROR')    
-                    return None       
-                hiddenStatusGeografts[ob.name] = ob.hide      
-                if ob.hide :
-                    ob.hide = False # we need to show it
-                    #ShowMessageBox("Geograft object '"+ ob.name +"' is not visible!", "Error", 'ERROR')
-                    #return None    
-        mergedMeshesName = "_".join(["body_subdiv_cage"] +mergeGeografts)
+            for geograftObj in geograft_children:
+                hiddenStatusGeografts[geograftObj.name] = geograftObj.hide      
+                if geograftObj.hide :
+                    geograftObj.hide = False # we need to show it, otherwise can't merge using a hidden object
+        geograft_refined = get_refined_geograft_names(geograft_children)
+        mergedMeshesName = "_".join([obj.name] + geograft_refined)
     #
     print("mergedMeshesName : {}".format(mergedMeshesName))
     if (params.createSubdivMeshOnExportUnreal):    
@@ -689,35 +701,33 @@ def export_to_unreal_v2(params) : #exportfolderpath,
             return None       
     print("$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$")
     deselect_all_objects()
-    ob = bpy.data.objects["body_subdiv_cage"]
-    ob.select = True
-    bpy.context.scene.objects.active = ob
+    obj.select = True
+    bpy.context.scene.objects.active = obj
     bpy.ops.object.duplicate(linked=False)
-    fbody = bpy.context.scene.objects.active
-    fbody.name = "fbody"
+    vxasset = bpy.context.scene.objects.active
+    vxasset.name = "vxasset"
     if params.includeGeograftsOnExportUnreal:
         #deselect_all_objects()       
         #
         #
-        for geoName in mergeGeografts:
+        for geograftObj in geograft_children:
             deselect_all_objects()
-            ob = bpy.data.objects[geoName]
-            ob.select = True
-            bpy.context.scene.objects.active = ob
+            geograftObj.select = True
+            bpy.context.scene.objects.active = geograftObj
             bpy.ops.object.duplicate(linked=False)
             geoClone = bpy.context.scene.objects.active
-            geoClone.parent = fbody
+            geoClone.parent = vxasset
             anatomies.append(geoClone)
-            bpy.data.objects[geoName].hide = hiddenStatusGeografts[ob.name] # we need to restore the hidden status
+            geograftObj.hide = hiddenStatusGeografts[geograftObj.name] # we need to restore the hidden status
         #
         deselect_all_objects()
         #
         for geo in anatomies:
             geo.select = True
             bpy.context.scene.objects.active = geo        
-        fbody.select=True
-        bpy.context.scene.objects.active = fbody
-        fbody.select=True
+        vxasset.select=True
+        bpy.context.scene.objects.active = vxasset
+        vxasset.select=True
         if ( operator_exists("daz.merge_geografts_nondestructive") ):
             print("daz.merge_geografts_nondestructive is available :)")
             bpy.ops.daz.merge_geografts_nondestructive()        
@@ -744,23 +754,23 @@ def export_to_unreal_v2(params) : #exportfolderpath,
     ############################################################################################
     #
     deselect_all_objects()
-    fbody.select=True
-    bpy.context.scene.objects.active = fbody
+    vxasset.select=True
+    bpy.context.scene.objects.active = vxasset
     #
     # Clear modifiers
-    bpy.ops.object.strip_and_clean(mod=True)
+    bpy.ops.gmtt.object_strip_and_clean(mod=True)
     
     if not params.exportShapekeys:
-        bpy.ops.object.strip_and_clean(sk=True)
+        bpy.ops.gmtt.object_strip_and_clean(sk=True)
     #
     ob = bpy.context.scene.objects.active
     if (params.createSubdivMeshOnExportUnreal):
-        print("Creating fbody_hires!") 
-        fbody_hires = duplicate_object_by_name("fbody","fbody_hires")
-        bpy.context.scene.objects.active = fbody_hires
+        print("Creating vxasset_hires!") 
+        vxasset_hires = duplicate_object_by_name("vxasset","vxasset_hires")
+        bpy.context.scene.objects.active = vxasset_hires
         if True==True:
             # Clear shapekeys + modifiers
-            bpy.ops.object.strip_and_clean(sk=True, mod=True)
+            bpy.ops.gmtt.object_strip_and_clean(sk=True, mod=True)
             # Subdivide the mesh using the subdivide operator in Edit Mode
             bpy.ops.object.mode_set(mode="EDIT")
             bpy.ops.mesh.reveal()
@@ -768,76 +778,76 @@ def export_to_unreal_v2(params) : #exportfolderpath,
             bpy.ops.mesh.subdivide(number_cuts=1)
             bpy.ops.mesh.select_all(action='DESELECT')
             bpy.ops.object.mode_set(mode="OBJECT")    
-        print("Creating fbody_stripped!") 
+        print("Creating vxasset_stripped!") 
         #
-        fbody_stripped = duplicate_object_by_name("fbody","fbody_stripped")
+        vxasset_stripped = duplicate_object_by_name("vxasset","vxasset_stripped")
         deselect_all_objects()
-        fbody_stripped.select=True
-        bpy.context.scene.objects.active = fbody_stripped
+        vxasset_stripped.select=True
+        bpy.context.scene.objects.active = vxasset_stripped
         print("strip_and_clean_selected_object!") 
         if False==False:
-            bpy.ops.object.strip_and_clean(vg=True, sk=True, mat=True, mod=True)
+            bpy.ops.gmtt.object_strip_and_clean(vg=True, sk=True, mat=True, mod=True)
             print("strip_and_clean_selected_object! DOENE") 
         #
         #
         if False == False:
-            print("Creating fbody_stripped_subdiv!") 
-            fbody_stripped_subdiv = duplicate_object_by_name("fbody_stripped","fbody_stripped_subdiv")
+            print("Creating vxasset_stripped_subdiv!") 
+            vxasset_stripped_subdiv = duplicate_object_by_name("vxasset_stripped","vxasset_stripped_subdiv")
             deselect_all_objects()
-            fbody_stripped_subdiv.select=True
-            bpy.context.scene.objects.active = fbody_stripped_subdiv
+            vxasset_stripped_subdiv.select=True
+            bpy.context.scene.objects.active = vxasset_stripped_subdiv
             bpy.ops.object.modifier_add(type='SUBSURF')
-            subsurf_modifier = fbody_stripped_subdiv.modifiers[-1] # get the last modifier (hence -1)
+            subsurf_modifier = vxasset_stripped_subdiv.modifiers[-1] # get the last modifier (hence -1)
             subsurf_modifier.levels = 1  # Set the subdivision levels as needed
             # Apply the Subdivision Surface modifier
             bpy.ops.object.modifier_apply( modifier = subsurf_modifier.name )
             #    
             deselect_all_objects()
-            print("fbody, fbody_hires , fbody_stripped and fbody_stripped_subdiv created!")
+            print("vxasset, vxasset_hires , vxasset_stripped and vxasset_stripped_subdiv created!")
             #adjust_vertices_location_between_different_topology_meshes_using_lookup_dict (source_obj, target_obj)
-            adjust_vertices_location_between_different_topology_meshes_using_lookup_dict(fbody_stripped_subdiv, fbody_hires)
+            adjust_vertices_location_between_different_topology_meshes_using_lookup_dict(vxasset_stripped_subdiv, vxasset_hires)
             deselect_all_objects()
-            #fbody.select = True   
-            #fbody_stripped.select=True
-            #fbody_hires.select=True
-            fbody_stripped_subdiv.select=True
-            bpy.context.scene.objects.active = fbody_stripped_subdiv
-            print("Removing fbody_stripped_subdiv as we no longer need it")
+            #vxasset.select = True   
+            #vxasset_stripped.select=True
+            #vxasset_hires.select=True
+            vxasset_stripped_subdiv.select=True
+            bpy.context.scene.objects.active = vxasset_stripped_subdiv
+            print("Removing vxasset_stripped_subdiv as we no longer need it")
             bpy.ops.object.delete(use_global=True)
         #
         #if (True == True):
         #    return   
-        #fbody.select = True        
-        #bpy.context.scene.objects.active = fbody
+        #vxasset.select = True        
+        #bpy.context.scene.objects.active = vxasset
         #
         deselect_all_objects()
         #
         if not params.exportShapekeys:
             pass
         else :
-            if fbody.data.shape_keys is None:
+            if vxasset.data.shape_keys is None:
                 print("Source object has no shape keys!") 
             else:        
-                sk_counter = len(fbody.data.shape_keys.key_blocks)
+                sk_counter = len(vxasset.data.shape_keys.key_blocks)
                 for idx in range(1, sk_counter):  #range is 1 and not 0, because I dont want to transfer the Basis shapekey which comes first
-                    fbody.select = True
-                    bpy.context.scene.objects.active = fbody
-                    fbody.active_shape_key_index = idx
-                    skname = fbody.active_shape_key.name
+                    vxasset.select = True
+                    bpy.context.scene.objects.active = vxasset
+                    vxasset.active_shape_key_index = idx
+                    skname = vxasset.active_shape_key.name
                     print("Copying Shape Key - ", skname)
-                    fbody.active_shape_key_index=0
-                    fbody_chupacabra_morph = duplicate_object_by_name("fbody_stripped","chupacabramorph_"+skname)
+                    vxasset.active_shape_key_index=0
+                    vxasset_chupacabra_morph = duplicate_object_by_name("vxasset_stripped","chupacabramorph_"+skname)
                     deselect_all_objects()
-                    fbody.select = True
-                    bpy.context.scene.objects.active = fbody
-                    fbody.active_shape_key_index = idx            
-                    fbody_chupacabra_morph.select = True
-                    bpy.context.scene.objects.active = fbody_chupacabra_morph
+                    vxasset.select = True
+                    bpy.context.scene.objects.active = vxasset
+                    vxasset.active_shape_key_index = idx            
+                    vxasset_chupacabra_morph.select = True
+                    bpy.context.scene.objects.active = vxasset_chupacabra_morph
                     bpy.ops.object.shape_key_transfer()
                     #there is no reason to set the active active_shape_key_index and clear the weights applied for the shapekey, is clean, only one and we set it anyway
-                    fbody_chupacabra_morph.data.shape_keys.key_blocks[skname].value = 1.0
+                    vxasset_chupacabra_morph.data.shape_keys.key_blocks[skname].value = 1.0
                     # set index to Basis shapekey and remove it so that the next shapekeys becomes basis
-                    fbody_chupacabra_morph.active_shape_key_index = 0
+                    vxasset_chupacabra_morph.active_shape_key_index = 0
                     bpy.ops.object.shape_key_remove(all=False)
                     # Apply the shapekey
                     print("Apply the shapekey - ", skname)
@@ -846,31 +856,31 @@ def export_to_unreal_v2(params) : #exportfolderpath,
                     # Add a Subdivision Surface modifier
                     print("Apply subdiv... ")
                     bpy.ops.object.modifier_add(type='SUBSURF')
-                    chupacabra_subsurf_modifier_name = fbody_chupacabra_morph.modifiers[-1].name # get the last modifier (hence -1)
-                    fbody_chupacabra_morph.modifiers[-1].levels = 1  # Set the subdivision levels as needed
+                    chupacabra_subsurf_modifier_name = vxasset_chupacabra_morph.modifiers[-1].name # get the last modifier (hence -1)
+                    vxasset_chupacabra_morph.modifiers[-1].levels = 1  # Set the subdivision levels as needed
                     # Apply the Subdivision Surface modifier
                     bpy.ops.object.modifier_apply( modifier = chupacabra_subsurf_modifier_name )  
                     #chupacabra_subsurf_modifier = None 
                     deselect_all_objects()
-                    #transfer vertex values from fbody_chupacabra_morph into a new Shapekey on fbody_hires using the lookup vertices list
-                    copy_vertices_to_shape_key_between_different_topology_meshes_using_lookup_dict(fbody_chupacabra_morph, fbody_hires, skname)                
+                    #transfer vertex values from vxasset_chupacabra_morph into a new Shapekey on vxasset_hires using the lookup vertices list
+                    copy_vertices_to_shape_key_between_different_topology_meshes_using_lookup_dict(vxasset_chupacabra_morph, vxasset_hires, skname)                
                     #at last delete the chupacabra object
                     deselect_all_objects()
-                    fbody_chupacabra_morph.select=True
-                    bpy.context.scene.objects.active = fbody_chupacabra_morph
+                    vxasset_chupacabra_morph.select=True
+                    bpy.context.scene.objects.active = vxasset_chupacabra_morph
                     #
-                    print("Deleting object: "+fbody_chupacabra_morph.name)
+                    print("Deleting object: "+vxasset_chupacabra_morph.name)
                     bpy.ops.object.delete()
                     print("Deleted object")
         #
-        print("fbody_chupacabra_morph (all) created!")
+        print("vxasset_chupacabra_morph (all) created!")
         # why do we need this actually?!?
         if (True == False):
             if ( operator_exists("export.shapekeys_to_json") ):
                 print("export.shapekeys_to_json is available :)")
                 deselect_all_objects()
-                fbody_hires.select=True
-                bpy.context.scene.objects.active = fbody_hires
+                vxasset_hires.select=True
+                bpy.context.scene.objects.active = vxasset_hires
                 cached_shapekeys_file_path = os.path.join(exportfolderpath,"cached_shapekeys.json")
                 bpy.ops.export.shapekeys_to_json_non_interactive('EXEC_DEFAULT',filepath = cached_shapekeys_file_path)
             else:
@@ -1228,7 +1238,7 @@ def export_to_unreal_v2(params) : #exportfolderpath,
     #
     #
     LODs = []
-    emptyLodGroup = bpy.data.objects.new( "fbodyLodGroup", None )
+    emptyLodGroup = bpy.data.objects.new( "vxassetLodGroup", None )
     emptyLodGroup["fbx_type"] = "LodGroup"
     emptyLodGroup["lookupVertexIdTable"] = "some/path/on/computer"
     bpy.context.scene.objects.link( emptyLodGroup )
@@ -1236,55 +1246,55 @@ def export_to_unreal_v2(params) : #exportfolderpath,
     bpy.context.scene.objects.active = emptyLodGroup
     emptyLodGroup.scale = scaleVector
     bpy.ops.object.transform_apply(scale = True)
-    #fbody_hires.parent = emptyLodGroup
-    #fbody.parent = emptyLodGroup
+    #vxasset_hires.parent = emptyLodGroup
+    #vxasset.parent = emptyLodGroup
 
     #add the armature modifier
     deselect_all_objects()
     if params.createSubdivMeshOnExportUnreal:
-        fbody_hires.select=True
-        bpy.context.scene.objects.active = fbody_hires
-        fbody_hires.rotation_euler[0] = rotationOnXAxis
+        vxasset_hires.select=True
+        bpy.context.scene.objects.active = vxasset_hires
+        vxasset_hires.rotation_euler[0] = rotationOnXAxis
         bpy.ops.object.transform_apply(rotation=True)    
-        fbody_hires.scale = scaleVector
+        vxasset_hires.scale = scaleVector
         bpy.ops.object.transform_apply(scale = True)    
         # Add the armature modifier
         bpy.ops.object.modifier_add(type='ARMATURE')
-        armature_modifier = fbody_hires.modifiers[-1]
+        armature_modifier = vxasset_hires.modifiers[-1]
         # Set the armature object for the modifier
         armature_modifier.object = armature_clone
-        LODs.append(fbody_hires)
+        LODs.append(vxasset_hires)
     
     #add the armature modifier
     deselect_all_objects()
-    fbody.select=True
-    bpy.context.scene.objects.active = fbody
-    fbody.rotation_euler[0] = rotationOnXAxis
-    #fbody.rotation_euler[1] = rotationOnZAxis
+    vxasset.select=True
+    bpy.context.scene.objects.active = vxasset
+    vxasset.rotation_euler[0] = rotationOnXAxis
+    #vxasset.rotation_euler[1] = rotationOnZAxis
     bpy.ops.object.transform_apply(rotation=True)   
-    fbody.scale = scaleVector
+    vxasset.scale = scaleVector
     bpy.ops.object.transform_apply(scale = True)      
     # Add the armature modifier
     bpy.ops.object.modifier_add(type='ARMATURE')
-    armature_modifier = fbody.modifiers[-1]
+    armature_modifier = vxasset.modifiers[-1]
     # Set the armature object for the modifier
     armature_modifier.object = armature_clone
-    LODs.append(fbody)
+    LODs.append(vxasset)
 
     #the order in which we set the parent is important it seems, otherwise in Unreal it will appear in the wrong order
     for i,lod in enumerate(LODs):
-        lod.name="fbody_LOD{}".format(i)
+        lod.name="vxasset_LOD{}".format(i)
         lod.parent = emptyLodGroup
         bpy.context.scene.update()	
         #print(o.name, o.type, o.data)
 
     # #rename them
-    # fbody.name = "fbody_LOD1"
-    # fbody_hires.name = "fbody_LOD0"
+    # vxasset.name = "vxasset_LOD1"
+    # vxasset_hires.name = "vxasset_LOD0"
     
-    # fbody_hires.parent = emptyLodGroup
+    # vxasset_hires.parent = emptyLodGroup
     # bpy.context.scene.update()	
-    # fbody.parent = emptyLodGroup
+    # vxasset.parent = emptyLodGroup
     # bpy.context.scene.update()	
     #
     emptyLodGroup.parent = armature_clone
@@ -1303,7 +1313,7 @@ def export_to_unreal_v2(params) : #exportfolderpath,
     armature_clone.select=True
     bpy.context.scene.objects.active = armature_clone
     export_params = {
-    "filepath": os.path.join(exportfolderpath,params.fbxFilename),#"SK_Belle.fbx"
+    "filepath": os.path.join(exportfolderpath,"SKM_"+obj.name+".fbx"), # params.fbxFilename),#"SK_Belle.fbx"
     "check_existing": False,
     "filter_glob": "*.fbx",
     "version": 'BIN7400',
@@ -1370,15 +1380,15 @@ def export_to_unreal_v2(params) : #exportfolderpath,
     #
     if params.cleanupTempMeshesMode =="AFTER" or params.cleanupTempMeshesMode =="BOTH":
         #
-        fbody_stripped = bpy.data.objects.get("fbody_stripped")
-        if fbody_stripped is not None:
-            fbody_stripped.select=True
-            bpy.context.scene.objects.active = fbody_stripped
+        vxasset_stripped = bpy.data.objects.get("vxasset_stripped")
+        if vxasset_stripped is not None:
+            vxasset_stripped.select=True
+            bpy.context.scene.objects.active = vxasset_stripped
         #
-        fbody_stripped_subdiv = bpy.data.objects.get("fbody_stripped_subdiv")
-        if fbody_stripped_subdiv is not None:
-            fbody_stripped_subdiv.select=True
-            bpy.context.scene.objects.active = fbody_stripped_subdiv
+        vxasset_stripped_subdiv = bpy.data.objects.get("vxasset_stripped_subdiv")
+        if vxasset_stripped_subdiv is not None:
+            vxasset_stripped_subdiv.select=True
+            bpy.context.scene.objects.active = vxasset_stripped_subdiv
         #
         emptyLodGroup.select=True
         for i,lod in enumerate(LODs):

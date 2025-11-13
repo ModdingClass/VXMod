@@ -188,12 +188,26 @@ class VXMOD_vars(bpy.types.PropertyGroup) :
             self.exportFolderPathUnreal = new_value
         print("exportFolderPathUnreal: ", self.exportFolderPathUnreal)
 
+    def get_all_mesh_items(self, context):
+        items = []
+        for obj in bpy.context.scene.objects:
+            if obj.type == 'MESH':
+                items.append((obj.name, obj.name, "Mesh object"))
+        return items
+
+
+    def update_exportable_mesh(self, context):
+        # Optional: print when changed manually
+        print("Exportable mesh set to:", self.exportable_mesh)
+        
+
+
     #exportfolderpath =  bpy.props.StringProperty(name="exportfolderpath", default='',subtype='DIR_PATH', update=update_func_exportfolderpath)
     #
     filepath =  bpy.props.StringProperty(name="filepath", default='',subtype='FILE_PATH')
     filepath_h5m =  bpy.props.StringProperty(name="filepath_h5m", default='',subtype='FILE_PATH')
     #
-    fbxFilename =  bpy.props.StringProperty(name="fbxFilename", default='',subtype='FILE_NAME')
+    #fbxFilename =  bpy.props.StringProperty(name="fbxFilename", default='',subtype='FILE_NAME')
     #
     #exportfolderpath =  bpy.props.StringProperty(name="exportfolderpath", default='',subtype='DIR_PATH', update=update_func_exportfolderpath)
     exportFolderPathUnreal = bpy.props.StringProperty(name="exportFolderPathUnreal", default='',subtype='DIR_PATH', update=update_func_exportFolderPathUnreal)
@@ -219,7 +233,19 @@ class VXMOD_vars(bpy.types.PropertyGroup) :
         ],
         default='AFTER',
     )
-              
+    exportable_mesh = bpy.props.EnumProperty(
+        name="Exportable Mesh",
+        description="Choose which mesh to export",
+        items=get_all_mesh_items,
+        update=update_exportable_mesh
+    )
+    pin_exportable_mesh = bpy.props.BoolProperty(
+        name="Pin Mesh",
+        description="If pinned, the selected mesh won’t change when you change the active object",
+        default=False
+    )
+
+        
 
 class VXMOD_CONVERTER_OT_PanelDifeomorphicToVXMod(bpy.types.Panel):
     """Creates a Panel in the Tool Shelf"""
@@ -317,9 +343,17 @@ class EXPORT_PT_VXModToUnreal(bpy.types.Panel):
     bl_category = "VXMod"
     def draw(self,context):
         layout=self.layout
-        box = layout.box()
         scene=context.scene
         vxmod  = scene.vxmod
+
+        row = layout.row(align=True)
+        # Combobox for mesh selection
+        row.prop(vxmod, "exportable_mesh", text="")
+        # Small pin icon toggle
+        icon = 'PINNED' if vxmod.pin_exportable_mesh else 'UNPINNED'
+        row.prop(vxmod, "pin_exportable_mesh", text="", icon=icon)
+        #
+        box = layout.box()
         row=box.row(align=True)
         row.operator('vxmod.fake',text='              ')
         row.operator('vxmod.fake',text='              ')
@@ -328,12 +362,22 @@ class EXPORT_PT_VXModToUnreal(bpy.types.Panel):
         row=box.row(align=True)
         row.operator('vxmod.fake',text='              ')        
         row.operator('vxmod.build_subdivision_vertex_matching_table',text='Build subdiv match', icon='GROUP_VERTEX')  
-        row.operator('vxmod.load_fbody_matching_index_dict_from_json',text='Load subdiv match',icon='GROUP_VERTEX')
+        row.operator('vxmod.load_subdivision_vertex_matching_table',text='Load subdiv match',icon='GROUP_VERTEX')
         #box.row().separator()
         row=box.row(align=True)
         row.operator('vxmod.fake',text='              ')
         row.operator('vxmod.fake',text='              ')
-        row.operator('vxmod.export_skeletalmesh_unreal',text='Export SKM_*', icon='TIME')            
+        #
+        export_label = "Export Mesh"
+        obj = bpy.data.objects.get(vxmod.exportable_mesh)
+        # check if it has an Armature modifier
+        if obj and any(mod.type == 'ARMATURE' for mod in obj.modifiers):
+            export_label = "Export SKM_" # + obj.name
+        elif obj:
+            export_label = "Export SM_" #+ obj.name
+        else:
+            export_label = "Export bugged"
+        row.operator('vxmod.export_skeletalmesh_unreal',text=export_label, icon='TIME')            
         row=box.row()
         
         #row.separator()
@@ -376,9 +420,9 @@ class EXPORT_PT_VXModToUnreal(bpy.types.Panel):
         subbox_row.label(text='Folder location:',icon=icon)
         subbox_row = subbox_exporter.row()
         subbox_row.prop(vxmod,'exportFolderPathUnreal',text='')        
-        subbox_row = subbox_exporter.row()
+        #subbox_row = subbox_exporter.row()
         #subbox_row.label(text='Body#:',icon='QUESTION')
-        subbox_row.prop(vxmod,'fbxFilename',text='Fbx filename')
+        #subbox_row.prop(vxmod,'fbxFilename',text='Fbx filename')
 
 
 
@@ -582,7 +626,7 @@ class ARMATURE_OT_import_armature(bpy.types.Operator, ImportHelper):
 
 class IMPORT_OT_Import_fbody_matching_index_dict_from_json(bpy.types.Operator):
     ''''''
-    bl_idname = "vxmod.load_fbody_matching_index_dict_from_json"
+    bl_idname = "vxmod.load_subdivision_vertex_matching_table"
     bl_label = ""
     bl_description = "Load subdivision vertex matching table from json"
     
@@ -591,11 +635,10 @@ class IMPORT_OT_Import_fbody_matching_index_dict_from_json(bpy.types.Operator):
     def execute(self, context):
         scene  = bpy.context.scene
         vxmod  = scene.vxmod
+        mesh_name = vxmod.exportable_mesh
+        bpy.context.scene.objects.active = bpy.data.objects[mesh_name]
         if os.path.isdir(vxmod.exportFolderPathUnreal):
-            load_fbody_matching_index_dict_from_json(vxmod.exportFolderPathUnreal, vxmod.includeGeograftsOnExportUnreal)
-            if vxmod.createSubdivMeshOnExportUnreal:
-                #fbx_type : LodGroup
-                print ("Creating the lod group parent empty: "+"fbx_type : LodGroup")
+            load_subdivision_vertex_matching_table(vxmod)
         else:
             ShowMessageBox("Missing the import/export folder", "Error", 'ERROR')
             return {'FINISHED'}        
@@ -606,13 +649,15 @@ class EXPORT_OT_Export_subdivision_vertex_matching_table(bpy.types.Operator):
     ''''''
     bl_idname = "vxmod.build_subdivision_vertex_matching_table"
     bl_label = ""
-    bl_description = "Build subdivision vertex matching table as \"key\":val where key is vertex on fbody (edit mode subdivided) and val is vertex on fbody_hires(modifier)"
+    bl_description = "Build subdivision vertex matching table as \"key\":val where key is vertex on mesh (edit mode subdivided) and val is vertex on mesh_hires(modifier)"
     
     group = bpy.props.StringProperty(name="ALL")
 
     def execute(self, context):
         scene  = bpy.context.scene
         vxmod  = scene.vxmod
+        mesh_name = vxmod.exportable_mesh
+        bpy.context.scene.objects.active = bpy.data.objects[mesh_name]
         if os.path.isdir(vxmod.exportFolderPathUnreal):
             print ("Exporting to: "+vxmod.exportFolderPathUnreal)
             build_subdivision_vertex_matching_table(vxmod)
@@ -630,14 +675,15 @@ class EXPORT_OT_VXModBodyToUnreal(bpy.types.Operator):
     group = bpy.props.StringProperty(name="ALL")
 
     def execute(self, context):
+        #scene = context.scene
         scene  = bpy.context.scene
         vxmod  = scene.vxmod
+        mesh_name = vxmod.exportable_mesh
+        bpy.context.scene.objects.active = bpy.data.objects[mesh_name]
+        #mesh_obj = bpy.data.objects.get(mesh_name)
         if os.path.isdir(vxmod.exportFolderPathUnreal):
             print ("Exporting to: "+vxmod.exportFolderPathUnreal)
             export_to_unreal_v2(vxmod)
-            if vxmod.createSubdivMeshOnExportUnreal:
-                #fbx_type : LodGroup
-                print ("Creating the lod group parent empty: "+"fbx_type : LodGroup")
         else:
             ShowMessageBox("Missing the export folder", "Error", 'ERROR')
             return {'FINISHED'}        
@@ -1070,7 +1116,12 @@ def post_ob_data_updated(scene):
                 pb.dp_helper.shouldUpdate = True
 
 
-
+def update_active_mesh(scene):
+    if not scene.vxmod.pin_exportable_mesh:
+        obj = bpy.context.object
+        if obj and obj.type == 'MESH':
+            if scene.vxmod.exportable_mesh != obj.name:
+                scene.vxmod.exportable_mesh = obj.name
 
 @persistent
 def addon_handler(scene):
@@ -1091,6 +1142,11 @@ def load_post_handler(dummyArg):
     
 #bpy.app.handlers.load_post.append(load_post_handler)
 
+def register_handlers():
+    if update_active_mesh not in bpy.app.handlers.scene_update_post:
+        bpy.app.handlers.scene_update_post.append(update_active_mesh)
+
+
 def register() :
     global custom_icons
     custom_icons = bpy.utils.previews.new()
@@ -1109,13 +1165,15 @@ def register() :
     bpy.types.Scene.vxmod = bpy.props.PointerProperty(type=VXMOD_vars)    
     vxmod = bpy.types.Scene.vxmod    
     #bpy.app.handlers.scene_update_post.append(addon_handler)
-    
+    register_handlers()
 
 def unregister() :
     global custom_icons
     bpy.utils.previews.remove(custom_icons)
     del bpy.types.Scene.vxmod
     #del bpy.types.PoseBone.hfg_bone
+    if update_active_mesh in bpy.app.handlers.scene_update_post:
+        bpy.app.handlers.scene_update_post.remove(update_active_mesh)
     bpy.app.handlers.scene_update_post.clear()
     #when there are many classes or a packages submodule has its own classes it can be tedious to list them all for un-registration. For more convenient loading bpy.utils.unregister_module (module)
     #Internally Blender collects subclasses on registrable types, storing them by the module in which they are defined. By passing the module name to bpy.utils.register_module Blender can register all classes created by this module and its submodules.
