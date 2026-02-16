@@ -290,19 +290,19 @@ def build_subdivision_vertex_matching_table(params) :
         mergedMeshesName = obj.name
         pass
     else:
-        if ( operator_exists("daz.merge_geografts_fast") or operator_exists("daz.merge_geografts") or operator_exists("daz.merge_geografts_nondestructive")):
+        if ( operator_exists("daz.merge_geografts_nondestructive_bmesh") or operator_exists("daz.merge_geografts_fast") or operator_exists("daz.merge_geografts") or operator_exists("daz.merge_geografts_nondestructive")):
             pass
         else:
             ShowMessageBox("'Include Geografts' is checked, but can't find `modded` Difeomorphic addon for Blender", "Error", 'ERROR')
             return None
-        #        
+        #
         geograft_children = get_geograft_children(obj)
         if len(geograft_children)==0:
             ShowMessageBox("'Include Geografts' is checked, but there are no geograft_ children for the exported mesh", "Error", 'ERROR')
             return None
         else:
             for geograftObj in geograft_children:
-                hiddenStatusGeografts[geograftObj.name] = geograftObj.hide      
+                hiddenStatusGeografts[geograftObj.name] = geograftObj.hide
                 if geograftObj.hide :
                     geograftObj.hide = False # we need to show it, otherwise can't merge using a hidden object
         geograft_refined = get_refined_geograft_names(geograft_children)
@@ -313,10 +313,10 @@ def build_subdivision_vertex_matching_table(params) :
     bpy.ops.object.duplicate(linked=False)
     vxasset = bpy.context.scene.objects.active
     vxasset.name = "vxasset_base_res"
-    
+
     if params.includeGeograftsOnExportUnreal:
         print("includeGeograftsOnExportUnreal is ON")
-        #deselect_all_objects()       
+        #deselect_all_objects()
         #
         #
         for geograftObj in geograft_children:
@@ -333,17 +333,20 @@ def build_subdivision_vertex_matching_table(params) :
         #
         for geo in anatomies:
             geo.select = True
-            bpy.context.scene.objects.active = geo        
+            bpy.context.scene.objects.active = geo
         vxasset.select=True
         bpy.context.scene.objects.active = vxasset
         vxasset.select=True
-        if ( operator_exists("daz.merge_geografts_nondestructive") ):
+        if ( operator_exists("daz.merge_geografts_nondestructive_bmesh") ):
+            print("daz.merge_geografts_nondestructive_bmesh is available :) (fast bmesh version)")
+            bpy.ops.daz.merge_geografts_nondestructive_bmesh()
+        elif ( operator_exists("daz.merge_geografts_nondestructive") ):
             print("daz.merge_geografts_nondestructive is available :)")
-            bpy.ops.daz.merge_geografts_nondestructive()        
+            bpy.ops.daz.merge_geografts_nondestructive()
         elif ( operator_exists("daz.merge_geografts_fast") ):
             print("daz.merge_geografts_fast is available")
             bpy.ops.daz.merge_geografts_fast()
-        else: 
+        else:
             print("daz.merge_geografts fallback :(")
             bpy.ops.daz.merge_geografts()
     
@@ -629,7 +632,7 @@ def export_to_unreal_v2(params) : #exportfolderpath,
             vxasset_stripped.select=True
             bpy.context.scene.objects.active = vxasset_stripped
         #
-        emptyLodGroup = bpy.data.objects.get("vxassetLodGroup")
+        emptyLodGroup = bpy.data.objects.get("meshLodGroup")
         if emptyLodGroup is not None:
             emptyLodGroup.select=True
             #
@@ -675,19 +678,19 @@ def export_to_unreal_v2(params) : #exportfolderpath,
         mergedMeshesName = obj.name
         pass
     else:
-        if ( operator_exists("daz.merge_geografts_fast") or operator_exists("daz.merge_geografts") or operator_exists("daz.merge_geografts_nondestructive")):
+        if ( operator_exists("daz.merge_geografts_nondestructive_bmesh") or operator_exists("daz.merge_geografts_fast") or operator_exists("daz.merge_geografts") or operator_exists("daz.merge_geografts_nondestructive")):
             pass
         else:
             ShowMessageBox("'Include Geografts' is checked, but can't find `modded` Difeomorphic addon for Blender", "Error", 'ERROR')
             return None
-        #        
+        #
         geograft_children = get_geograft_children(obj)
         if len(geograft_children)==0:
             ShowMessageBox("'Include Geografts' is checked, but there are no geograft_ children for the exported mesh", "Error", 'ERROR')
             return None
         else:
             for geograftObj in geograft_children:
-                hiddenStatusGeografts[geograftObj.name] = geograftObj.hide      
+                hiddenStatusGeografts[geograftObj.name] = geograftObj.hide
                 if geograftObj.hide :
                     geograftObj.hide = False # we need to show it, otherwise can't merge using a hidden object
         geograft_refined = get_refined_geograft_names(geograft_children)
@@ -728,13 +731,16 @@ def export_to_unreal_v2(params) : #exportfolderpath,
         vxasset.select=True
         bpy.context.scene.objects.active = vxasset
         vxasset.select=True
-        if ( operator_exists("daz.merge_geografts_nondestructive") ):
+        if ( operator_exists("daz.merge_geografts_nondestructive_bmesh") ):
+            print("daz.merge_geografts_nondestructive_bmesh is available :) (fast bmesh version)")
+            bpy.ops.daz.merge_geografts_nondestructive_bmesh()
+        elif ( operator_exists("daz.merge_geografts_nondestructive") ):
             print("daz.merge_geografts_nondestructive is available :)")
-            bpy.ops.daz.merge_geografts_nondestructive()        
+            bpy.ops.daz.merge_geografts_nondestructive()
         elif ( operator_exists("daz.merge_geografts_fast") ):
             print("daz.merge_geografts_fast is available")
             bpy.ops.daz.merge_geografts_fast()
-        else: 
+        else:
             print("daz.merge_geografts fallback :(")
             bpy.ops.daz.merge_geografts()
     ############################################################################################
@@ -1238,7 +1244,7 @@ def export_to_unreal_v2(params) : #exportfolderpath,
     #
     #
     LODs = []
-    emptyLodGroup = bpy.data.objects.new( "vxassetLodGroup", None )
+    emptyLodGroup = bpy.data.objects.new( "meshLodGroup", None )
     emptyLodGroup["fbx_type"] = "LodGroup"
     emptyLodGroup["lookupVertexIdTable"] = "some/path/on/computer"
     bpy.context.scene.objects.link( emptyLodGroup )
@@ -1283,7 +1289,7 @@ def export_to_unreal_v2(params) : #exportfolderpath,
 
     #the order in which we set the parent is important it seems, otherwise in Unreal it will appear in the wrong order
     for i,lod in enumerate(LODs):
-        lod.name="vxasset_LOD{}".format(i)
+        lod.name="mesh_LOD{}".format(i)
         lod.parent = emptyLodGroup
         bpy.context.scene.update()	
         #print(o.name, o.type, o.data)
