@@ -28,6 +28,8 @@ from bpy_extras.io_utils import axis_conversion
 
 import bpy
 import json
+import struct
+import hashlib
 
 import json
 
@@ -218,6 +220,85 @@ def copy_vertices_to_shape_key_between_different_topology_meshes_using_lookup_di
     # Final message
     print("Vertex positions from '{}' copied to new shape key '{}' on '{}'.".format(source_obj.name, new_shape_key_name, target_obj.name))
 
+
+SHAPEKEY_CACHE_MAGIC = b'VXSK'
+SHAPEKEY_CACHE_VERSION = 1
+
+
+def compute_basis_fingerprint(mesh_obj):
+    """Compute MD5 fingerprint of a mesh object's vertex positions."""
+    n = len(mesh_obj.data.vertices)
+    cos = [0.0] * (n * 3)
+    mesh_obj.data.vertices.foreach_get("co", cos)
+    raw = struct.pack('<%df' % len(cos), *cos)
+    return hashlib.md5(raw).digest()
+
+
+def save_shapekey_subdiv_cache(filepath, vxasset_hires, sk_names, fingerprint):
+    """Save subdivided shape key data to a binary cache file."""
+    n_verts = len(vxasset_hires.data.vertices)
+    n_keys = len(sk_names)
+    with open(filepath, 'wb') as f:
+        # Header
+        f.write(SHAPEKEY_CACHE_MAGIC)
+        f.write(struct.pack('<III', SHAPEKEY_CACHE_VERSION, n_verts, n_keys))
+        f.write(fingerprint)
+        # Per shape key
+        key_blocks = vxasset_hires.data.shape_keys.key_blocks
+        for skname in sk_names:
+            name_bytes = skname.encode('utf-8')
+            f.write(struct.pack('<I', len(name_bytes)))
+            f.write(name_bytes)
+            sk = key_blocks[skname]
+            cos = [0.0] * (n_verts * 3)
+            sk.data.foreach_get("co", cos)
+            f.write(struct.pack('<%df' % len(cos), *cos))
+    print("Saved shape key cache ({} keys, {} verts) to {}".format(n_keys, n_verts, filepath))
+
+
+def load_shapekey_subdiv_cache(filepath, n_verts, sk_names, fingerprint):
+    """Load and validate a shape key subdivision cache.
+    Returns dict {skname: float_list} or None if cache is invalid/missing."""
+    if not os.path.exists(filepath):
+        return None
+    try:
+        with open(filepath, 'rb') as f:
+            # Read and validate header
+            magic = f.read(4)
+            if magic != SHAPEKEY_CACHE_MAGIC:
+                print("Cache invalid: bad magic")
+                return None
+            version, cached_n_verts, cached_n_keys = struct.unpack('<III', f.read(12))
+            if version != SHAPEKEY_CACHE_VERSION:
+                print("Cache invalid: version mismatch ({} != {})".format(version, SHAPEKEY_CACHE_VERSION))
+                return None
+            if cached_n_verts != n_verts:
+                print("Cache invalid: vertex count mismatch ({} != {})".format(cached_n_verts, n_verts))
+                return None
+            if cached_n_keys != len(sk_names):
+                print("Cache invalid: key count mismatch ({} != {})".format(cached_n_keys, len(sk_names)))
+                return None
+            cached_fp = f.read(16)
+            if cached_fp != fingerprint:
+                print("Cache invalid: fingerprint mismatch (mesh geometry changed)")
+                return None
+            # Read per-key data
+            result = {}
+            floats_per_key = n_verts * 3
+            bytes_per_key = floats_per_key * 4
+            for i in range(cached_n_keys):
+                name_len = struct.unpack('<I', f.read(4))[0]
+                name = f.read(name_len).decode('utf-8')
+                if i >= len(sk_names) or name != sk_names[i]:
+                    print("Cache invalid: key name mismatch at index {} ('{}' != '{}')".format(i, name, sk_names[i] if i < len(sk_names) else '?'))
+                    return None
+                cos = list(struct.unpack('<%df' % floats_per_key, f.read(bytes_per_key)))
+                result[name] = cos
+        print("Loaded shape key cache ({} keys) from {}".format(len(result), filepath))
+        return result
+    except (IOError, struct.error) as e:
+        print("Cache read error: {}".format(e))
+        return None
 
 
 def duplicate_object_data_level(source_obj, new_name=None):
@@ -846,45 +927,65 @@ def export_to_unreal_v2(params) : #exportfolderpath,
             pass
         else :
             if vxasset.data.shape_keys is None:
-                print("Source object has no shape keys!") 
-            else:        
+                print("Source object has no shape keys!")
+            else:
                 sk_counter = len(vxasset.data.shape_keys.key_blocks)
-                for idx in range(1, sk_counter):  #range is 1 and not 0, because I dont want to transfer the Basis shapekey which comes first
-                    vxasset.select = True
-                    bpy.context.scene.objects.active = vxasset
-                    vxasset.active_shape_key_index = idx
-                    skname = vxasset.active_shape_key.name
-                    print("Copying Shape Key - ", skname)
-                    #
-                    # Duplicate vxasset_stripped using data-level copy (no shape keys on it)
-                    vxasset_chupacabra_morph = duplicate_object_data_level(vxasset_stripped, "chupacabramorph_" + skname)
-                    #
-                    # Read morphed vertex positions directly from vxasset's shape key data
-                    # This replaces the expensive O(n^2) shape_key_transfer() proximity search
-                    sk = vxasset.data.shape_keys.key_blocks[skname]
-                    n = len(sk.data)
-                    cos = [0.0] * (n * 3)
-                    sk.data.foreach_get("co", cos)
-                    # Write them directly onto chupacabra_morph's vertices
-                    vxasset_chupacabra_morph.data.vertices.foreach_set("co", cos)
-                    vxasset_chupacabra_morph.data.update()
-                    #
-                    # Add a Subdivision Surface modifier (data-level add, operator apply)
-                    deselect_all_objects()
-                    vxasset_chupacabra_morph.select = True
-                    bpy.context.scene.objects.active = vxasset_chupacabra_morph
-                    print("Apply subdiv... ")
-                    subsurf_mod = vxasset_chupacabra_morph.modifiers.new(name="Subsurf", type='SUBSURF')
-                    subsurf_mod.levels = 1
-                    # Apply requires operator (no data-level apply in 2.79)
-                    bpy.ops.object.modifier_apply(modifier=subsurf_mod.name)
-                    deselect_all_objects()
-                    #transfer vertex values from vxasset_chupacabra_morph into a new Shapekey on vxasset_hires using the lookup vertices list
-                    copy_vertices_to_shape_key_between_different_topology_meshes_using_lookup_dict(vxasset_chupacabra_morph, vxasset_hires, skname)
-                    #at last delete the chupacabra object (data-level to match data-level creation)
-                    print("Deleting object: "+vxasset_chupacabra_morph.name)
-                    delete_object_data_level(vxasset_chupacabra_morph)
-                    print("Deleted object")
+                sk_names = [vxasset.data.shape_keys.key_blocks[i].name for i in range(1, sk_counter)]
+                fingerprint = compute_basis_fingerprint(vxasset_stripped)
+                cache_path = os.path.join(exportfolderpath, mergedMeshesName + "_shapekeys_subdiv_cache.bin")
+                n_hires_verts = len(vxasset_hires.data.vertices)
+                cached = load_shapekey_subdiv_cache(cache_path, n_hires_verts, sk_names, fingerprint)
+                #
+                if cached is not None:
+                    # FAST PATH: load from cache, skip all subsurf work
+                    print("Using cached shape key data (skipping subdivision)")
+                    for skname in sk_names:
+                        print("Loading cached Shape Key - ", skname)
+                        if not vxasset_hires.data.shape_keys:
+                            vxasset_hires.shape_key_add(name="Basis")
+                        new_sk = vxasset_hires.shape_key_add(name=skname)
+                        new_sk.data.foreach_set("co", cached[skname])
+                    vxasset_hires.data.update()
+                else:
+                    # SLOW PATH: subdivide each shape key and remap
+                    for idx in range(1, sk_counter):  #range is 1 and not 0, because I dont want to transfer the Basis shapekey which comes first
+                        vxasset.select = True
+                        bpy.context.scene.objects.active = vxasset
+                        vxasset.active_shape_key_index = idx
+                        skname = vxasset.active_shape_key.name
+                        print("Copying Shape Key - ", skname)
+                        #
+                        # Duplicate vxasset_stripped using data-level copy (no shape keys on it)
+                        vxasset_chupacabra_morph = duplicate_object_data_level(vxasset_stripped, "chupacabramorph_" + skname)
+                        #
+                        # Read morphed vertex positions directly from vxasset's shape key data
+                        # This replaces the expensive O(n^2) shape_key_transfer() proximity search
+                        sk = vxasset.data.shape_keys.key_blocks[skname]
+                        n = len(sk.data)
+                        cos = [0.0] * (n * 3)
+                        sk.data.foreach_get("co", cos)
+                        # Write them directly onto chupacabra_morph's vertices
+                        vxasset_chupacabra_morph.data.vertices.foreach_set("co", cos)
+                        vxasset_chupacabra_morph.data.update()
+                        #
+                        # Add a Subdivision Surface modifier (data-level add, operator apply)
+                        deselect_all_objects()
+                        vxasset_chupacabra_morph.select = True
+                        bpy.context.scene.objects.active = vxasset_chupacabra_morph
+                        print("Apply subdiv... ")
+                        subsurf_mod = vxasset_chupacabra_morph.modifiers.new(name="Subsurf", type='SUBSURF')
+                        subsurf_mod.levels = 1
+                        # Apply requires operator (no data-level apply in 2.79)
+                        bpy.ops.object.modifier_apply(modifier=subsurf_mod.name)
+                        deselect_all_objects()
+                        #transfer vertex values from vxasset_chupacabra_morph into a new Shapekey on vxasset_hires using the lookup vertices list
+                        copy_vertices_to_shape_key_between_different_topology_meshes_using_lookup_dict(vxasset_chupacabra_morph, vxasset_hires, skname)
+                        #at last delete the chupacabra object (data-level to match data-level creation)
+                        print("Deleting object: "+vxasset_chupacabra_morph.name)
+                        delete_object_data_level(vxasset_chupacabra_morph)
+                        print("Deleted object")
+                    # Save cache for next export
+                    save_shapekey_subdiv_cache(cache_path, vxasset_hires, sk_names, fingerprint)
         #
         print("vxasset_chupacabra_morph (all) created!")
         # why do we need this actually?!?
