@@ -151,22 +151,22 @@ def adjust_vertices_location_between_different_topology_meshes_using_lookup_dict
     if len(source_obj.data.vertices) != len(target_obj.data.vertices):
         print("Vertex counts do not match. Cannot copy vertex positions.")
         pass
-    # Access the vertices of the source object
-    source_vertices = source_obj.data.vertices
-    target_vertices = target_obj.data.vertices
-    # Copy vertex positions from the source object to target object
     print("len(target_obj.data.vertices): {} ".format(len(target_obj.data.vertices)))
-    if (True == True):
-        for i in range(len(target_obj.data.vertices)):
-            if i not in loaded_int_key_dict:
-                #print("Missing {}".format(i))
-                continue
-            else:
-                #print("Transfering {} - {}".format(i,loaded_int_key_dict[i] )) 
-                src_vertex = source_vertices[loaded_int_key_dict[i]]
-                tgt_vertex = target_vertices[i]
-                tgt_vertex.co = src_vertex.co.copy()
-    # Update the target object to reflect changes
+    # Bulk read all source vertex positions
+    n_src = len(source_obj.data.vertices)
+    src_cos = [0.0] * (n_src * 3)
+    source_obj.data.vertices.foreach_get("co", src_cos)
+    # Bulk read current target positions (for vertices not in the lookup dict)
+    n_tgt = len(target_obj.data.vertices)
+    tgt_cos = [0.0] * (n_tgt * 3)
+    target_obj.data.vertices.foreach_get("co", tgt_cos)
+    # Remap using lookup dict (pure Python, no Blender API calls per vertex)
+    for tgt_idx, src_idx in loaded_int_key_dict.items():
+        tgt_cos[tgt_idx * 3]     = src_cos[src_idx * 3]
+        tgt_cos[tgt_idx * 3 + 1] = src_cos[src_idx * 3 + 1]
+        tgt_cos[tgt_idx * 3 + 2] = src_cos[src_idx * 3 + 2]
+    # Bulk write to target
+    target_obj.data.vertices.foreach_set("co", tgt_cos)
     target_obj.data.update()
     # Final message
     print("Vertex positions from '{}' copied to '{}'.".format(source_obj.name, target_obj.name))
@@ -188,9 +188,6 @@ def copy_vertices_to_shape_key_between_different_topology_meshes_using_lookup_di
     if len(source_obj.data.vertices) != len(target_obj.data.vertices):
         print("Vertex counts do not match. Cannot copy vertex positions.")
         pass
-    # Access the vertices of the source object
-    source_vertices = source_obj.data.vertices
-    target_vertices = target_obj.data.vertices
     # Create a new shape key on the target object if necessary
     if not target_obj.data.shape_keys:
         target_obj.shape_key_add(name="Basis")
@@ -201,33 +198,51 @@ def copy_vertices_to_shape_key_between_different_topology_meshes_using_lookup_di
         #return
     # Create a new shape key on the target object
     new_shape_key = target_obj.shape_key_add(name=new_shape_key_name)
-    # Copy vertex positions from the source object to the new shape key on the target object
     print("len(target_obj.data.vertices): {} ".format(len(target_obj.data.vertices)))
-    #
-    # print(loaded_int_key_dict[0])
-    if (True == True):
-        for i in range(len(target_obj.data.vertices)):
-            if i not in loaded_int_key_dict:
-                #print("Missing {}".format(i))
-                continue
-            else:
-                #print("Transfering {} - {}".format(i,loaded_int_key_dict[i] )) 
-                src_vertex = source_vertices[loaded_int_key_dict[i]]
-                #tgt_vertex = target_vertices[loaded_int_key_dict[i]]
-                #tgt_delta = src_vertex.co - tgt_vertex.co
-                tgt_vertex = new_shape_key.data[i]#.co=tgt_delta.copy()
-                tgt_vertex.co = src_vertex.co.copy()
-    # Update the target object to reflect changes
+    # Bulk read all source vertex positions
+    n_src = len(source_obj.data.vertices)
+    src_cos = [0.0] * (n_src * 3)
+    source_obj.data.vertices.foreach_get("co", src_cos)
+    # Bulk read current shape key positions (Basis values as default)
+    n_tgt = len(new_shape_key.data)
+    tgt_cos = [0.0] * (n_tgt * 3)
+    new_shape_key.data.foreach_get("co", tgt_cos)
+    # Remap using lookup dict (pure Python, no Blender API calls per vertex)
+    for tgt_idx, src_idx in loaded_int_key_dict.items():
+        tgt_cos[tgt_idx * 3]     = src_cos[src_idx * 3]
+        tgt_cos[tgt_idx * 3 + 1] = src_cos[src_idx * 3 + 1]
+        tgt_cos[tgt_idx * 3 + 2] = src_cos[src_idx * 3 + 2]
+    # Bulk write to shape key
+    new_shape_key.data.foreach_set("co", tgt_cos)
     target_obj.data.update()
     # Final message
     print("Vertex positions from '{}' copied to new shape key '{}' on '{}'.".format(source_obj.name, new_shape_key_name, target_obj.name))
 
 
 
+def duplicate_object_data_level(source_obj, new_name=None):
+    """Data-level mesh duplication — creates a fresh object with a copy of the mesh data.
+    Uses bpy.data.objects.new() instead of obj.copy() to avoid carrying stale
+    internal references (animation data, drivers, undo state) that can crash
+    when mixed with bpy.ops.object.delete() in loops."""
+    new_mesh = source_obj.data.copy()
+    new_obj = bpy.data.objects.new(new_name or source_obj.name + "_copy", new_mesh)
+    bpy.context.scene.objects.link(new_obj)
+    return new_obj
+
+def delete_object_data_level(obj):
+    """Data-level object removal — pairs with duplicate_object_data_level.
+    Removes the object and its mesh data without operator dispatch."""
+    mesh = obj.data
+    bpy.context.scene.objects.unlink(obj)
+    bpy.data.objects.remove(obj)
+    if mesh and mesh.users == 0:
+        bpy.data.meshes.remove(mesh)
+
 def duplicate_selected_object(newObjectName=None):
     if len(bpy.context.selected_objects)==0:
         ShowMessageBox("No object is selected", "Error", 'ERROR')
-        return None              
+        return None
     return duplicate_object_by_name( bpy.context.selected_objects[0].name , newObjectName)
 
 def duplicate_object_by_name(sourceObjectName=None, newObjectName=None):
@@ -248,7 +263,6 @@ def duplicate_object_by_name(sourceObjectName=None, newObjectName=None):
     new_object = bpy.context.active_object
     if newObjectName is not None:
         new_object.name = newObjectName
-    #bpy.context.scene.update()        
     return new_object
 
 
@@ -765,7 +779,7 @@ def export_to_unreal_v2(params) : #exportfolderpath,
     #
     # Clear modifiers
     bpy.ops.gmtt.object_strip_and_clean(mod=True)
-    
+
     if not params.exportShapekeys:
         bpy.ops.gmtt.object_strip_and_clean(sk=True)
     #
@@ -841,42 +855,35 @@ def export_to_unreal_v2(params) : #exportfolderpath,
                     vxasset.active_shape_key_index = idx
                     skname = vxasset.active_shape_key.name
                     print("Copying Shape Key - ", skname)
-                    vxasset.active_shape_key_index=0
-                    vxasset_chupacabra_morph = duplicate_object_by_name("vxasset_stripped","chupacabramorph_"+skname)
+                    #
+                    # Duplicate vxasset_stripped using data-level copy (no shape keys on it)
+                    vxasset_chupacabra_morph = duplicate_object_data_level(vxasset_stripped, "chupacabramorph_" + skname)
+                    #
+                    # Read morphed vertex positions directly from vxasset's shape key data
+                    # This replaces the expensive O(n^2) shape_key_transfer() proximity search
+                    sk = vxasset.data.shape_keys.key_blocks[skname]
+                    n = len(sk.data)
+                    cos = [0.0] * (n * 3)
+                    sk.data.foreach_get("co", cos)
+                    # Write them directly onto chupacabra_morph's vertices
+                    vxasset_chupacabra_morph.data.vertices.foreach_set("co", cos)
+                    vxasset_chupacabra_morph.data.update()
+                    #
+                    # Add a Subdivision Surface modifier (data-level add, operator apply)
                     deselect_all_objects()
-                    vxasset.select = True
-                    bpy.context.scene.objects.active = vxasset
-                    vxasset.active_shape_key_index = idx            
                     vxasset_chupacabra_morph.select = True
                     bpy.context.scene.objects.active = vxasset_chupacabra_morph
-                    bpy.ops.object.shape_key_transfer()
-                    #there is no reason to set the active active_shape_key_index and clear the weights applied for the shapekey, is clean, only one and we set it anyway
-                    vxasset_chupacabra_morph.data.shape_keys.key_blocks[skname].value = 1.0
-                    # set index to Basis shapekey and remove it so that the next shapekeys becomes basis
-                    vxasset_chupacabra_morph.active_shape_key_index = 0
-                    bpy.ops.object.shape_key_remove(all=False)
-                    # Apply the shapekey
-                    print("Apply the shapekey - ", skname)
-                    # Remove the real shapekey which now is the Basis (because next we want to apply the subsurf modifier)
-                    bpy.ops.object.shape_key_remove(all=True)
-                    # Add a Subdivision Surface modifier
                     print("Apply subdiv... ")
-                    bpy.ops.object.modifier_add(type='SUBSURF')
-                    chupacabra_subsurf_modifier_name = vxasset_chupacabra_morph.modifiers[-1].name # get the last modifier (hence -1)
-                    vxasset_chupacabra_morph.modifiers[-1].levels = 1  # Set the subdivision levels as needed
-                    # Apply the Subdivision Surface modifier
-                    bpy.ops.object.modifier_apply( modifier = chupacabra_subsurf_modifier_name )  
-                    #chupacabra_subsurf_modifier = None 
+                    subsurf_mod = vxasset_chupacabra_morph.modifiers.new(name="Subsurf", type='SUBSURF')
+                    subsurf_mod.levels = 1
+                    # Apply requires operator (no data-level apply in 2.79)
+                    bpy.ops.object.modifier_apply(modifier=subsurf_mod.name)
                     deselect_all_objects()
                     #transfer vertex values from vxasset_chupacabra_morph into a new Shapekey on vxasset_hires using the lookup vertices list
-                    copy_vertices_to_shape_key_between_different_topology_meshes_using_lookup_dict(vxasset_chupacabra_morph, vxasset_hires, skname)                
-                    #at last delete the chupacabra object
-                    deselect_all_objects()
-                    vxasset_chupacabra_morph.select=True
-                    bpy.context.scene.objects.active = vxasset_chupacabra_morph
-                    #
+                    copy_vertices_to_shape_key_between_different_topology_meshes_using_lookup_dict(vxasset_chupacabra_morph, vxasset_hires, skname)
+                    #at last delete the chupacabra object (data-level to match data-level creation)
                     print("Deleting object: "+vxasset_chupacabra_morph.name)
-                    bpy.ops.object.delete()
+                    delete_object_data_level(vxasset_chupacabra_morph)
                     print("Deleted object")
         #
         print("vxasset_chupacabra_morph (all) created!")
@@ -978,8 +985,7 @@ def export_to_unreal_v2(params) : #exportfolderpath,
             # Rotate the selected bone by 90 degrees along the X-axis in local space
             bpy.ops.transform.rotate(value=math.radians(-90), axis=(1, 0, 0), constraint_axis=(True, False, False), constraint_orientation='LOCAL')
             ebone.roll +=math.radians(0)
-            # Update the scene to reflect changes
-            bpy.context.scene.update()
+            # scene.update() removed — single update after all bone loops
         #
         for boneName in pelvisBones:
             ebone = ebones[boneName]
@@ -992,8 +998,7 @@ def export_to_unreal_v2(params) : #exportfolderpath,
             # Rotate the selected bone by 90 degrees along the X-axis in local space
             bpy.ops.transform.rotate(value=math.radians(-90), axis=(1, 0, 0), constraint_axis=(True, False, False), constraint_orientation='LOCAL')
             ebone.roll +=math.radians(180)
-            # Update the scene to reflect changes
-            bpy.context.scene.update()
+            # scene.update() removed — single update after all bone loops
         #
         for boneName in spineBones:
             ebone = ebones[boneName]
@@ -1006,8 +1011,7 @@ def export_to_unreal_v2(params) : #exportfolderpath,
             # Rotate the selected bone by 90 degrees along the X-axis in local space
             bpy.ops.transform.rotate(value=math.radians(-90), axis=(0, 0, 1), constraint_axis=( False, False, True), constraint_orientation='NORMAL')
             ebone.roll +=math.radians(180)
-            # Update the scene to reflect changes
-            bpy.context.scene.update()
+            # scene.update() removed — single update after all bone loops
         # first lets do the right bones, as those should follow the bone orientation for the right leg
         for boneName in legRightBones:
             ebone = ebones[boneName]
@@ -1021,8 +1025,7 @@ def export_to_unreal_v2(params) : #exportfolderpath,
             #bpy.ops.transform.rotate(value=math.radians(-90), axis=(1, 0, 0), constraint_axis=(True, False, False), constraint_orientation='LOCAL')
             bpy.ops.transform.rotate(value=math.radians(-90), axis=(0, 0, 1), constraint_axis=(False,False,True), constraint_orientation='NORMAL')
             ebone.roll +=math.radians(180)
-            # Update the scene to reflect changes
-            bpy.context.scene.update()   
+            # scene.update() removed — single update after all bone loops   
         #second lets do the left leg bones, as those should follow the other way, not along the the bones
         for boneName in legLeftBones:
             ebone = ebones[boneName]
@@ -1035,8 +1038,7 @@ def export_to_unreal_v2(params) : #exportfolderpath,
             # Rotate the selected bone by 90 degrees along the X-axis in local space
             bpy.ops.transform.rotate(value=math.radians(-90), axis=(0, 0, 1), constraint_axis=(False,False,True), constraint_orientation='NORMAL')
             ebone.roll +=math.radians(0)
-            # Update the scene to reflect changes
-            bpy.context.scene.update()            
+            # scene.update() removed — single update after all bone loops            
         #
         for boneName in ankleRightBones:
             ebone = ebones[boneName]
@@ -1049,8 +1051,7 @@ def export_to_unreal_v2(params) : #exportfolderpath,
             # Rotate the selected bone by 90 degrees along the X-axis in local space
             bpy.ops.transform.rotate(value=math.radians(0), axis=(1, 0, 0), constraint_axis=(True, False, False), constraint_orientation='LOCAL')
             ebone.roll = math.radians(-90)
-            # Update the scene to reflect changes
-            bpy.context.scene.update()  
+            # scene.update() removed — single update after all bone loops  
         for boneName in ankleLeftBones:
             ebone = ebones[boneName]
             bpy.ops.armature.select_all(action='DESELECT')  # Deselect all bones first
@@ -1062,8 +1063,7 @@ def export_to_unreal_v2(params) : #exportfolderpath,
             # Rotate the selected bone by 90 degrees along the X-axis in local space
             bpy.ops.transform.rotate(value=math.radians(180), axis=(1, 0, 0), constraint_axis=(True, False, False), constraint_orientation='LOCAL')
             ebone.roll = math.radians(-90)
-            # Update the scene to reflect changes
-            bpy.context.scene.update()         
+            # scene.update() removed — single update after all bone loops         
         #
         for boneName in ballLeftBones:
             ebone = ebones[boneName]
@@ -1076,8 +1076,7 @@ def export_to_unreal_v2(params) : #exportfolderpath,
             # Rotate the selected bone by 90 degrees along the X-axis in local space
             bpy.ops.transform.rotate(value=math.radians(-90), axis=(1, 0, 0), constraint_axis=(True, False, False), constraint_orientation='LOCAL')
             ebone.roll = math.radians(270)
-            # Update the scene to reflect changes
-            bpy.context.scene.update()   
+            # scene.update() removed — single update after all bone loops   
         for boneName in ballRightBones:
             ebone = ebones[boneName]
             bpy.ops.armature.select_all(action='DESELECT')  # Deselect all bones first
@@ -1089,8 +1088,7 @@ def export_to_unreal_v2(params) : #exportfolderpath,
             # Rotate the selected bone by 90 degrees along the X-axis in local space
             bpy.ops.transform.rotate(value=math.radians(90), axis=(1, 0, 0), constraint_axis=(True, False, False), constraint_orientation='LOCAL')
             ebone.roll = math.radians(270)
-            # Update the scene to reflect changes
-            bpy.context.scene.update()   
+            # scene.update() removed — single update after all bone loops   
         #
         for boneName in clavicleLeftBones:
             ebone = ebones[boneName]
@@ -1103,8 +1101,7 @@ def export_to_unreal_v2(params) : #exportfolderpath,
             # Rotate the selected bone by 90 degrees along the X-axis in local space
             bpy.ops.transform.rotate(value=math.radians(90), axis=(0, 0, 1), constraint_axis=(False, False, True), constraint_orientation='NORMAL')
             ebone.roll += math.radians(0)
-            # Update the scene to reflect changes
-            bpy.context.scene.update()
+            # scene.update() removed — single update after all bone loops
         #
         for boneName in clavicleRightBones:
             ebone = ebones[boneName]
@@ -1116,8 +1113,7 @@ def export_to_unreal_v2(params) : #exportfolderpath,
             bpy.context.scene.cursor_location = armature_object.matrix_world * ebone.head # 2.79 uses cursor_location
             bpy.ops.transform.rotate(value=math.radians(90), axis=(0, 0, 1), constraint_axis=(False, False, True), constraint_orientation='NORMAL')
             ebone.roll += math.radians(180)
-            # Update the scene to reflect changes
-            bpy.context.scene.update()     
+            # scene.update() removed — single update after all bone loops     
         #   
         for boneName in armLeftBones:
             ebone = ebones[boneName]
@@ -1130,8 +1126,7 @@ def export_to_unreal_v2(params) : #exportfolderpath,
             # Rotate the selected bone by 90 degrees along the X-axis in local space
             bpy.ops.transform.rotate(value=math.radians(90), axis=(0, 0, 1), constraint_axis=(False, False, True), constraint_orientation='LOCAL')
             ebone.roll += math.radians(-90)
-            # Update the scene to reflect changes
-            bpy.context.scene.update()     
+            # scene.update() removed — single update after all bone loops     
         for boneName in armRightBones:
             ebone = ebones[boneName]
             bpy.ops.armature.select_all(action='DESELECT')  # Deselect all bones first
@@ -1143,8 +1138,7 @@ def export_to_unreal_v2(params) : #exportfolderpath,
             # Rotate the selected bone by 90 degrees along the X-axis in local space
             bpy.ops.transform.rotate(value=math.radians(90), axis=(0, 0, 1), constraint_axis=(False, False, True), constraint_orientation='LOCAL')
             ebone.roll += math.radians(-90)
-            # Update the scene to reflect changes
-            bpy.context.scene.update()  
+            # scene.update() removed — single update after all bone loops  
         for boneName in handLeftBones:
             ebone = ebones[boneName]
             bpy.ops.armature.select_all(action='DESELECT')  # Deselect all bones first
@@ -1157,8 +1151,7 @@ def export_to_unreal_v2(params) : #exportfolderpath,
             # Rotate the selected bone by 90 degrees along the X-axis in local space
             bpy.ops.transform.rotate(value=math.radians(90), axis=(0, 1, 0), constraint_axis=(False, True, False), constraint_orientation='LOCAL')
             ebone.roll += math.radians(180)
-            # Update the scene to reflect changes
-            bpy.context.scene.update()         
+            # scene.update() removed — single update after all bone loops         
         for boneName in handRightBones:
             ebone = ebones[boneName]
             bpy.ops.armature.select_all(action='DESELECT')  # Deselect all bones first
@@ -1171,8 +1164,7 @@ def export_to_unreal_v2(params) : #exportfolderpath,
             # Rotate the selected bone by 90 degrees along the X-axis in local space
             bpy.ops.transform.rotate(value=math.radians(90), axis=(0, 1, 0), constraint_axis=(False, True, False), constraint_orientation='LOCAL')
             ebone.roll += math.radians(0)
-            # Update the scene to reflect changes
-            bpy.context.scene.update()   
+            # scene.update() removed — single update after all bone loops   
         #armature_clone.rotation_mode = 'ZXY'           
         for boneName in fingerLeftBones:
             ebone = ebones[boneName]
@@ -1186,8 +1178,7 @@ def export_to_unreal_v2(params) : #exportfolderpath,
             # Rotate the selected bone by 90 degrees along the X-axis in local space
             bpy.ops.transform.rotate(value=math.radians(270), axis=(1, 0, 0), constraint_axis=(True,False,False), constraint_orientation='NORMAL')
             ebone.roll += math.radians(-90)
-            # Update the scene to reflect changes
-            bpy.context.scene.update()       
+            # scene.update() removed — single update after all bone loops       
         for boneName in breastRightBones:
             ebone = ebones[boneName]
             bpy.ops.armature.select_all(action='DESELECT')  # Deselect all bones first
@@ -1200,8 +1191,7 @@ def export_to_unreal_v2(params) : #exportfolderpath,
             # Rotate the selected bone by 90 degrees along the X-axis in local space
             bpy.ops.transform.rotate(value=math.radians(90), axis=(1, 0, 0), constraint_axis=(True, False, False), constraint_orientation='NORMAL')
             ebone.roll += math.radians(90)
-            # Update the scene to reflect changes
-            bpy.context.scene.update()     
+            # scene.update() removed — single update after all bone loops     
         for boneName in breastLeftBones:
             ebone = ebones[boneName]
             bpy.ops.armature.select_all(action='DESELECT')  # Deselect all bones first
@@ -1214,8 +1204,7 @@ def export_to_unreal_v2(params) : #exportfolderpath,
             # Rotate the selected bone by 90 degrees along the X-axis in local space
             bpy.ops.transform.rotate(value=math.radians(90), axis=(1, 0, 0), constraint_axis=(True, False, False), constraint_orientation='NORMAL')
             ebone.roll += math.radians(-90)
-            # Update the scene to reflect changes
-            bpy.context.scene.update()                         
+            # scene.update() removed — single update after all bone loops                         
     #
     # Update the view
     bpy.context.scene.update()
@@ -1372,7 +1361,7 @@ def export_to_unreal_v2(params) : #exportfolderpath,
     bpy.ops.export_scene.fbx(**export_params)
 
     bpy.context.scene.unit_settings.system = 'NONE'
-    bpy.context.scene.unit_settings.scale_length = 1.0 
+    bpy.context.scene.unit_settings.scale_length = 1.0
     #
     duration = 1000  # milliseconds
     freq = 440  # Hz
@@ -1400,8 +1389,8 @@ def export_to_unreal_v2(params) : #exportfolderpath,
         for i,lod in enumerate(LODs):
             lod.select=True
         armature_clone.select=True
-        bpy.context.scene.objects.active = armature_clone        
-        bpy.ops.object.delete(use_global=True)   
+        bpy.context.scene.objects.active = armature_clone
+        bpy.ops.object.delete(use_global=True)
     deselect_all_objects()
     #end
 

@@ -193,6 +193,8 @@ class VXMOD_vars(bpy.types.PropertyGroup) :
         for obj in bpy.context.scene.objects:
             if obj.type == 'MESH':
                 items.append((obj.name, obj.name, "Mesh object"))
+        if not items:
+            items.append(('NONE', "(No meshes)", "No mesh objects in scene"))
         return items
 
 
@@ -345,6 +347,19 @@ class EXPORT_PT_VXModToUnreal(bpy.types.Panel):
         layout=self.layout
         scene=context.scene
         vxmod  = scene.vxmod
+
+        # Dependency checks
+        missing = []
+        if not operator_exists("gmtt.object_strip_and_clean"):
+            missing.append("Game Mod Tiny Tools (GMTT)")
+        if not operator_exists("daz.merge_geografts"):
+            missing.append("Diffeomorphic (import_daz)")
+        if missing:
+            box = layout.box()
+            box.alert = True
+            box.label(text="Missing required addons:", icon='ERROR')
+            for name in missing:
+                box.label(text="  " + name)
 
         row = layout.row(align=True)
         # Combobox for mesh selection
