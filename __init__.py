@@ -224,6 +224,7 @@ class VXMOD_vars(bpy.types.PropertyGroup) :
     cleanTempMeshesAfterExportUnreal = bpy.props.BoolProperty(name="cleanTempMeshesAfterExportUnreal", description="Delete temp/work meshes after exporting",    default=True)
     reorientBonesOnExportUnreal = bpy.props.BoolProperty(name="reorientBonesOnExportUnreal", description="Reorient bones (Unreal friendly) before exporting",    default=True)
     exportShapekeys = bpy.props.BoolProperty(name="exportShapekeys", description="Export shapekeys for base and subdivided mesh (uncheck for exporting faster/DEBUG)",    default=True)
+    cacheShapekeys = bpy.props.BoolProperty(name="cacheShapekeys", description="Cache subdivided shape key data to disk. Speeds up subsequent exports by skipping subdivision",    default=True)
     #
     cleanupTempMeshesMode = bpy.props.EnumProperty(
         name="Cleanup Temp Meshes",
@@ -392,7 +393,9 @@ class EXPORT_PT_VXModToUnreal(bpy.types.Panel):
             export_label = "Export SM_" #+ obj.name
         else:
             export_label = "Export bugged"
-        row.operator('vxmod.export_skeletalmesh_unreal',text=export_label, icon='TIME')            
+        row.operator('vxmod.export_skeletalmesh_unreal',text=export_label, icon='TIME')
+        row=box.row(align=True)
+        row.operator('export.vxmod_animation_to_unreal', text="Export ANIM_" + vxmod.exportable_mesh, icon='RENDER_ANIMATION')
         row=box.row()
         
         #row.separator()
@@ -414,6 +417,10 @@ class EXPORT_PT_VXModToUnreal(bpy.types.Panel):
         row_extra=extra_export_box.row(align=True)
         #row_extra.alignment = 'RIGHT'
         row_extra.prop(vxmod,'exportShapekeys',text="Export Shapekeys")
+        sub = extra_export_box.row(align=True)
+        sub.active = vxmod.exportShapekeys
+        sub.separator()
+        sub.prop(vxmod,'cacheShapekeys',text="Shapekeys Caching")
         #
         row_extra=extra_export_box.row(align=True)
         col = row_extra.column()
@@ -704,6 +711,24 @@ class EXPORT_OT_VXModBodyToUnreal(bpy.types.Operator):
             return {'FINISHED'}        
         return {'FINISHED'}
 
+
+
+class EXPORT_OT_VXModAnimationToUnreal(bpy.types.Operator):
+    ''''''
+    bl_idname = "export.vxmod_animation_to_unreal"
+    bl_label = ""
+    bl_description = "Export Animation (armature only) for Unreal"
+
+    def execute(self, context):
+        scene = bpy.context.scene
+        vxmod = scene.vxmod
+        mesh_name = vxmod.exportable_mesh
+        bpy.context.scene.objects.active = bpy.data.objects[mesh_name]
+        if os.path.isdir(vxmod.exportFolderPathUnreal):
+            export_animation_to_unreal(vxmod)
+        else:
+            ShowMessageBox("Missing the export folder", "Error", 'ERROR')
+        return {'FINISHED'}
 
 
 class CONVERT_OT_G3F_Body_Difeomorphic_new(bpy.types.Operator):
