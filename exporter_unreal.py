@@ -347,9 +347,67 @@ def duplicate_object_by_name(sourceObjectName=None, newObjectName=None):
 
 # this function is supposed to take the base res mesh (or body) and make 2 duplicates
 # hires from edit mode subdivide operator - vertices from 0 .. 18119 are coming from the base (unsubdivided) mesh
-# hires from object mode subsurf modifier
-# lookup table from operator to modifier is created and saved to json file as a dictionary of key:val pairs
-def build_subdivision_vertex_matching_table(params) : 
+def build_subdivision_vertex_matching_table(params):
+    """
+    Builds and exports three JSON files that describe how the base mesh vertices relate to the
+    subdivided mesh vertices. Must be run before FBX export when subdivision is needed.
+
+    OVERVIEW
+    --------
+    Two temporary meshes are created from the active object:
+
+      vxasset_from_editmode_subdivide_operator  (= "vxasset")
+          The base mesh subdivided once using Blender's Edit Mode > Subdivide operator.
+          This is the mesh that gets exported to Unreal as LOD0.
+          The edit-mode subdivide keeps base vertex indices intact (0..N-1 are unchanged).
+
+      vxasset_from_objmode_subsurf_modifier  (= "vxasset_hires")
+          The base mesh with a Subdivision Surface modifier applied in Object Mode.
+          Produces better smoothing than the edit-mode operator but uses a different
+          vertex ordering. Used in Blender to author shape keys / morphs.
+
+    THE VERTEX GROUP TRICK
+    ----------------------
+    Before subdividing, every base vertex is assigned its own vertex group named after its
+    index ("0", "1", ...). After subdivision each new vertex inherits the groups of its
+    parent vertices, revealing exactly which base vertices produced it:
+      - 1 group  → "base"  vertex (unchanged from base mesh)
+      - 2 groups → "edge"  vertex (midpoint of 2 base vertices)
+      - 4 groups → "face"  vertex (centroid of 4 base vertices, one per quad corner)
+
+    OUTPUT FILES  (written to params.exportFolderPathUnreal)
+    --------------------------------------------------------
+    1. {mergedMeshesName}_vertex_mapping_list.json   ← PRIMARY, used by Unreal
+       JSON array. One entry per subdivided vertex:
+         {"index": int, "type": "base"|"edge"|"face", "base_indices": [int, ...]}
+       base entries also include: connected_base_neighbor_indices, connected_faces_base_indices
+       edge entries also include: adjacent_face_point_indices, adjacent_faces_base_indices
+       Written with inline arrays (dumps_inline_arrays) for compact but readable formatting.
+       Linked to the Unreal asset via FBX custom property:
+         vxasset_hires["lookupVertexIdTable"] = mergedMeshesName + "_vertex_mapping_list.json"
+
+    2. {mergedMeshesName}_vertex_groups_dict.json    ← simple compact form, Blender reference
+       JSON object: {"subdivIdx": "baseIdx1_baseIdx2_..."}
+       Compact version of the mapping list — base indices joined by underscores.
+       Superseded by the mapping list for Unreal use; kept as a simpler debug reference.
+
+    3. {mergedMeshesName}_matching_index_dict.json   ← Blender-internal use ONLY
+       JSON object: {"editModeVertIdx": subsurfVertIdx}
+       Maps each edit-mode-subdivide vertex to the corresponding subsurf-modifier vertex.
+       Used within Blender to transfer shape key deltas from vxasset_hires back to vxasset.
+       NOT needed in Unreal — do not embed in .uasset.
+
+    GEOGRAFT HANDLING
+    -----------------
+    If params.includeGeograftsOnExportUnreal is True, geograft children are merged into the
+    base mesh before subdividing, and mergedMeshesName becomes the combined name
+    (e.g. "Belle_genz" for Belle + genz geograft).
+
+    CLEANUP
+    -------
+    Temporary meshes (vxasset, vxasset_hires) are deleted after export if
+    params.cleanupTempMeshesMode is 'AFTER' or 'BOTH'.
+    """
     obj = bpy.context.active_object
     if not obj or obj.type != 'MESH':
         ShowMessageBox("No mesh object selected for export.", "Error", 'ERROR')
@@ -700,7 +758,43 @@ def _notify_export_complete():
         ctypes.windll.user32.FlashWindow(ctypes.windll.user32.GetActiveWindow(), True)
 
 
+
 def reorient_bones_for_unreal(armature_clone, armature_object):
+    #lets make the bones friendly with Unreal
+    #Note: changing the roll of the bone in Blender will rotate the bone on the Green (Y) axis in Unreal
+    # Blender Y axis is the Unreal Y axis (green)
+    # Blender X axis is the Unreal Z axis (blue)
+    # Blender Z axis is the Unreal X axis (red)
+    #
+    # For a start, try to adjust the green axis in Unreal to match what you need, then adjust roll in Blender to match the Unreal axis
+    #
+    bpy.ops.object.mode_set(mode='EDIT', toggle=False)
+    ebones = armature_clone.data.edit_bones
+    for ebone in ebones:
+        bpy.ops.armature.select_all(action='DESELECT')  # Deselect all bones first
+        ebone.select = True
+        ebone.select_head = True  # Select both head and tail
+        ebone.select_tail = True
+        # Set the 3D cursor to the pelvis bone's head (rotation pivot point)
+        bpy.context.scene.cursor_location = armature_object.matrix_world * ebone.head # 2.79 uses cursor_location
+        # Rotate the selected bone by +/-90 degrees along the z-axis in NORMAL space
+        if ebone.get("isFlipped") == True:
+            bpy.ops.transform.rotate(value=math.radians(-90), axis=(0, 0, 1), constraint_axis=( False, False, True), constraint_orientation='NORMAL')
+        else:
+            bpy.ops.transform.rotate(value=math.radians(90), axis=(0, 0, 1), constraint_axis=( False, False, True), constraint_orientation='NORMAL')
+        ebone.roll +=math.radians(180)
+        # scene.update() removed — single update after all bone loops
+    # first lets do the right bones, as those should follow the bone orientation for the right leg
+    # Update the view
+    bpy.context.scene.update()
+    #
+    #
+    #we are done with making the bones friendly, lets go back to object mode to also transform the armature as a whole
+    bpy.ops.object.mode_set(mode='OBJECT')
+
+
+
+def reorient_bones_for_unreal2(armature_clone, armature_object):
     #lets make the bones friendly with Unreal
     #Note: changing the roll of the bone in Blender will rotate the bone on the Green (Y) axis in Unreal
     # Blender Y axis is the Unreal Y axis (green)
@@ -734,7 +828,7 @@ def reorient_bones_for_unreal(armature_clone, armature_object):
     breastLeftBones = ['breast_scale_joint.L','breast_joint01.L','breast_joint02.L','breast_nipple_joint.L','breast_nipple_jointEnd.L']
     breastRightBones = ['breast_scale_joint.R','breast_joint01.R','breast_joint02.R','breast_nipple_joint.R','breast_nipple_jointEnd.R']
     #
-    spineBones = ['spine_01', 'spine_02', 'spine_03', 'spine_04', 'spine_05', 'neck_01', 'neck_02', 'head', 'head_jointEnd']
+    spineBones = ['spine_01', 'spine_02', 'spine_03', 'spine_04', 'spine_05', 'neck_01', 'neck_02', 'head'] #, 'head_jointEnd']
     #
     rootBones = ['base']
     rootBones = []
@@ -1352,18 +1446,19 @@ def export_to_unreal_v2(params) : #exportfolderpath,
     LODs = []
     emptyLodGroup = bpy.data.objects.new( "meshLodGroup", None )
     emptyLodGroup["fbx_type"] = "LodGroup"
-    emptyLodGroup["lookupVertexIdTable"] = "some/path/on/computer"
+    #emptyLodGroup["lookupVertexIdTable"] = "some/path/on/computer"
     bpy.context.scene.objects.link( emptyLodGroup )
     emptyLodGroup.select=True
     bpy.context.scene.objects.active = emptyLodGroup
     emptyLodGroup.scale = scaleVector
     bpy.ops.object.transform_apply(scale = True)
-    #vxasset_hires.parent = emptyLodGroup
-    #vxasset.parent = emptyLodGroup
+
 
     #add the armature modifier
     deselect_all_objects()
     if params.createSubdivMeshOnExportUnreal:
+        vxasset_hires["lookupVertexIdTable"] = mergedMeshesName+"_vertex_mapping_list.json" #"some/custom/path/on/computer"
+        vxasset_hires["isHiRes"] = True
         vxasset_hires.select=True
         bpy.context.scene.objects.active = vxasset_hires
         vxasset_hires.rotation_euler[0] = rotationOnXAxis
@@ -1379,6 +1474,8 @@ def export_to_unreal_v2(params) : #exportfolderpath,
     
     #add the armature modifier
     deselect_all_objects()
+    vxasset["lookupVertexIdTable"] = ""
+    vxasset["isHiRes"] = False
     vxasset.select=True
     bpy.context.scene.objects.active = vxasset
     vxasset.rotation_euler[0] = rotationOnXAxis
