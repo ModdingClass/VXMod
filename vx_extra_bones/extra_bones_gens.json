@@ -1,0 +1,110 @@
+[
+    {
+        "name": "penis_joint01",
+        "head": [ "0.000000", "-0.066907", "0.918579" ],
+        "tail": [ "0.000000", "-0.084383", "0.894195" ],
+        "roll": "-0.000031",
+        "parent": "pelvis",
+        "connected": false,
+        "deform": true
+    },
+    {
+        "name": "penis_joint02",
+        "head": [ "0.000000", "-0.085251", "0.892984" ],
+        "tail": [ "0.000000", "-0.096090", "0.865010" ],
+        "roll": "-0.000048",
+        "parent": "penis_joint01",
+        "connected": false,
+        "deform": true
+    },
+    {
+        "name": "penis_joint03",
+        "head": [ "0.000000", "-0.098475", "0.858856" ],
+        "tail": [ "0.000000", "-0.105221", "0.829624" ],
+        "roll": "-0.000047",
+        "parent": "penis_joint02",
+        "connected": false,
+        "deform": true
+    },
+    {
+        "name": "penis_end",
+        "head": [ "0.000000", "-0.107434", "0.820036" ],
+        "tail": [ "0.030000", "-0.107434", "0.820036" ],
+        "roll": "-0.000008",
+        "parent": "penis_joint03",
+        "connected": false,
+        "deform": false
+    },
+    {
+        "name": "testicles_joint01",
+        "head": [ "0.000000", "-0.042521", "0.885559" ],
+        "tail": [ "-0.000000", "-0.053663", "0.857705" ],
+        "roll": "-0.000032",
+        "parent": "pelvis",
+        "connected": false,
+        "deform": true
+    },
+    {
+        "name": "testicles_joint02",
+        "head": [ "-0.000000", "-0.054466", "0.855698" ],
+        "tail": [ "-0.000000", "-0.056957", "0.825801" ],
+        "roll": "-0.000020",
+        "parent": "testicles_joint01",
+        "connected": false,
+        "deform": true
+    },
+    {
+        "name": "testicles_end",
+        "head": [ "-0.000000", "-0.057452", "0.819864" ],
+        "tail": [ "0.030000", "-0.057452", "0.819864" ],
+        "roll": "0.000018",
+        "parent": "testicles_joint02",
+        "connected": false,
+        "deform": false
+    },
+    {
+        "name": "vagina_joint01.L",
+        "head": [ "0.004713", "-0.006033", "0.917652" ],
+        "tail": [ "0.004713", "-0.015415", "0.883479" ],
+        "roll": "-0.000005",
+        "parent": "pelvis",
+        "connected": false,
+        "deform": true
+    },
+    {
+        "name": "vagina_end.L",
+        "head": [ "0.004713", "-0.015415", "0.883479" ],
+        "tail": [ "-0.015287", "-0.015415", "0.883479" ],
+        "roll": "0.000003",
+        "parent": "vagina_joint01.L",
+        "connected": false,
+        "deform": false
+    },
+    {
+        "name": "vagina_joint01.R",
+        "head": [ "-0.004618", "-0.006033", "0.917652" ],
+        "tail": [ "-0.004618", "-0.015424", "0.883508" ],
+        "roll": "-0.000004",
+        "parent": "pelvis",
+        "connected": false,
+        "deform": true
+    },
+    {
+        "name": "vagina_end.R",
+        "head": [ "-0.004618", "-0.015424", "0.883508" ],
+        "tail": [ "0.015382", "-0.015424", "0.883508" ],
+        "roll": "0.000003",
+        "parent": "vagina_joint01.R",
+        "connected": false,
+        "deform": false
+    },
+    {
+        "name": "anus_joint",
+        "head": [ "-0.000048", "0.036090", "0.896276" ],
+        "tail": [ "0.019952", "0.036090", "0.896276" ],
+        "roll": "-0.000006",
+        "parent": "pelvis",
+        "connected": false,
+        "deform": true
+    }
+]

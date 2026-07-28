@@ -70,25 +70,25 @@ def alignArmatureToDifeomorphicNew():
         difeomorphic_eb_tail_world = cachedBonesData[row[1]]["tail"]        
         #fast_align_bones(row[0], row[1], vx_armature, row[2])
     #
-    fast_align_bones(cachedBonesData["pelvis"]["head"], cachedBonesData["pelvis"]["tail"], vx_armature, "base")
+    fast_align_bones(cachedBonesData["pelvis"]["head"], cachedBonesData["pelvis"]["tail"], vx_armature, "pelvis")
     #
-    ebones["base"].tail.x =  ebones["base"].head.x
-    ebones["base"].tail.y =  ebones["base"].head.y
-    ebones["base"].tail.z =  ebones["base"].head.z + 0.02
+    ebones["pelvis"].tail.x =  ebones["pelvis"].head.x
+    ebones["pelvis"].tail.y =  ebones["pelvis"].head.y
+    ebones["pelvis"].tail.z =  ebones["pelvis"].head.z + 0.02
     #
     #
-    fast_align_bones(cachedBonesData["pelvis"]["head"], (cachedBonesData["pelvis"]["head"]+cachedBonesData["pelvis"]["tail"])/2, vx_armature, "pelvis_joint")
-    fast_align_bones(cachedBonesData["abdomenLower"]["head"], cachedBonesData["abdomenLower"]["tail"], vx_armature, "spine_joint01")
-    fast_align_bones(cachedBonesData["abdomenLower"]["tail"], cachedBonesData["chestLower"]["head"], vx_armature, "spine_joint02")
-    fast_align_bones(cachedBonesData["chestLower"]["head"], (cachedBonesData["chestLower"]["tail"]+cachedBonesData["chestUpper"]["head"])/2, vx_armature, "spine_joint03")
-    fast_align_bones((cachedBonesData["chestLower"]["tail"]+cachedBonesData["chestUpper"]["head"])/2, cachedBonesData["chestUpper"]["tail"], vx_armature, "spine_joint04")
-    fast_align_bones(cachedBonesData["chestUpper"]["tail"], cachedBonesData["neckLower"]["head"], vx_armature, "spine_jointEnd")
-    average_spine_y = (ebones["spine_joint01"].head.y + ebones["spine_joint04"].tail.y)/2
-    #ebones["spine_joint02"].head.y =  ebones["spine_joint01"].tail.y
-    #ebones["spine_joint02"].tail.y =  average_spine_y
-    #ebones["spine_joint03"].head.y =  average_spine_y 
-    #ebones["spine_joint03"].tail.y =  average_spine_y
-    #ebones["spine_joint04"].head.y =  average_spine_y
+    fast_align_bones(cachedBonesData["pelvis"]["head"], (cachedBonesData["pelvis"]["head"]+cachedBonesData["pelvis"]["tail"])/2, vx_armature, "pelvis")
+    fast_align_bones(cachedBonesData["abdomenLower"]["head"], cachedBonesData["abdomenLower"]["tail"], vx_armature, "spine_01")
+    fast_align_bones(cachedBonesData["abdomenLower"]["tail"], cachedBonesData["chestLower"]["head"], vx_armature, "spine_02")
+    fast_align_bones(cachedBonesData["chestLower"]["head"], (cachedBonesData["chestLower"]["tail"]+cachedBonesData["chestUpper"]["head"])/2, vx_armature, "spine_03")
+    fast_align_bones((cachedBonesData["chestLower"]["tail"]+cachedBonesData["chestUpper"]["head"])/2, cachedBonesData["chestUpper"]["tail"], vx_armature, "spine_04")
+    fast_align_bones(cachedBonesData["chestUpper"]["tail"], cachedBonesData["neckLower"]["head"], vx_armature, "spine_05")
+    average_spine_y = (ebones["spine_01"].head.y + ebones["spine_04"].tail.y)/2
+    #ebones["spine_02"].head.y =  ebones["spine_01"].tail.y
+    #ebones["spine_02"].tail.y =  average_spine_y
+    #ebones["spine_03"].head.y =  average_spine_y
+    #ebones["spine_03"].tail.y =  average_spine_y
+    #ebones["spine_04"].head.y =  average_spine_y
     #
     #the pelvis bone should be straight up maybe?!?
     #ebones["pelvis"].tail.y =  ebones["pelvis"].head.y 
@@ -101,23 +101,25 @@ def alignArmatureToDifeomorphicNew():
     #["chestUpper", "chestUpper", "spine_joint04",90],
     #
     #["neckLower", "neckLower", "neck_joint01",90],
-    #["neckUpper", "neckUpper", "neck_jointEnd",90],
+    #["neckUpper", "neckUpper", "neck_end",90],
     #["head", "head", "head_joint01",90],
     #["head", "head", "head_joint02",90]
     #
     #
     # lets do the legs
-    fast_align_bones(cachedBonesData["lThighBend"]["head"],cachedBonesData["lShin"]["head"] , vx_armature, "hip_joint.L",radians(0) ) # cachedBonesData["lThighBend"]["roll"])
-    fast_align_bones(cachedBonesData["lThighTwist"]["head"],cachedBonesData["lShin"]["head"] , vx_armature, "thigh_twist_joint.L", radians(0) ) #cachedBonesData["lThighTwist"]["roll"])    
-    fast_align_bones(cachedBonesData["lShin"]["head"],cachedBonesData["lFoot"]["head"] , vx_armature, "knee_joint.L", radians(0) ) #cachedBonesData["lShin"]["roll"])    
-    fast_align_bones(cachedBonesData["lFoot"]["head"],cachedBonesData["lToe"]["head"] , vx_armature, "ankle_joint.L", radians(0) ) #cachedBonesData["lFoot"]["roll"])  
-    fast_align_bones(cachedBonesData["lToe"]["head"],cachedBonesData["lToe"]["tail"] , vx_armature, "ball_joint.L", radians(0) ) #cachedBonesData["lToe"]["roll"])  
+    fast_align_bones(cachedBonesData["lThighBend"]["head"],cachedBonesData["lShin"]["head"] , vx_armature, "thigh.L",radians(0) ) # cachedBonesData["lThighBend"]["roll"])
+    fast_align_bones(cachedBonesData["lThighTwist"]["head"],cachedBonesData["lShin"]["head"] , vx_armature, "thigh_twist_01.L", radians(0) ) #cachedBonesData["lThighTwist"]["roll"])
+    fast_align_bones(cachedBonesData["lThighTwist"]["head"],cachedBonesData["lShin"]["head"] , vx_armature, "thigh_twist_02.L", radians(0) )
+    fast_align_bones(cachedBonesData["lShin"]["head"],cachedBonesData["lFoot"]["head"] , vx_armature, "calf.L", radians(0) ) #cachedBonesData["lShin"]["roll"])
+    fast_align_bones(cachedBonesData["lFoot"]["head"],cachedBonesData["lToe"]["head"] , vx_armature, "foot.L", radians(0) ) #cachedBonesData["lFoot"]["roll"])
+    fast_align_bones(cachedBonesData["lToe"]["head"],cachedBonesData["lToe"]["tail"] , vx_armature, "ball.L", radians(0) ) #cachedBonesData["lToe"]["roll"])
     #
-    fast_align_bones(cachedBonesData["rThighBend"]["head"],cachedBonesData["rShin"]["head"] , vx_armature, "hip_joint.R", radians(0) ) #cachedBonesData["rThighBend"]["roll"])
-    fast_align_bones(cachedBonesData["rThighTwist"]["head"],cachedBonesData["rShin"]["head"] , vx_armature, "thigh_twist_joint.R", radians(0) ) #cachedBonesData["rThighTwist"]["roll"])    
-    fast_align_bones(cachedBonesData["rShin"]["head"],cachedBonesData["rFoot"]["head"] , vx_armature, "knee_joint.R", radians(0) ) #cachedBonesData["rShin"]["roll"])    
-    fast_align_bones(cachedBonesData["rFoot"]["head"],cachedBonesData["rToe"]["head"] , vx_armature, "ankle_joint.R", radians(0) ) #cachedBonesData["rFoot"]["roll"])  
-    fast_align_bones(cachedBonesData["rToe"]["head"],cachedBonesData["rToe"]["tail"] , vx_armature, "ball_joint.R", radians(0) ) #cachedBonesData["rToe"]["roll"])  
+    fast_align_bones(cachedBonesData["rThighBend"]["head"],cachedBonesData["rShin"]["head"] , vx_armature, "thigh.R", radians(0) ) #cachedBonesData["rThighBend"]["roll"])
+    fast_align_bones(cachedBonesData["rThighTwist"]["head"],cachedBonesData["rShin"]["head"] , vx_armature, "thigh_twist_01.R", radians(0) ) #cachedBonesData["rThighTwist"]["roll"])
+    fast_align_bones(cachedBonesData["rThighTwist"]["head"],cachedBonesData["rShin"]["head"] , vx_armature, "thigh_twist_02.R", radians(0) )
+    fast_align_bones(cachedBonesData["rShin"]["head"],cachedBonesData["rFoot"]["head"] , vx_armature, "calf.R", radians(0) ) #cachedBonesData["rShin"]["roll"])
+    fast_align_bones(cachedBonesData["rFoot"]["head"],cachedBonesData["rToe"]["head"] , vx_armature, "foot.R", radians(0) ) #cachedBonesData["rFoot"]["roll"])
+    fast_align_bones(cachedBonesData["rToe"]["head"],cachedBonesData["rToe"]["tail"] , vx_armature, "ball.R", radians(0) ) #cachedBonesData["rToe"]["roll"])
     #makeBonesCollinearFromBoneHeadToBoneTail ????
     '''
     for index, row in enumerate(leg_bones_matching):
@@ -143,19 +145,23 @@ def alignArmatureToDifeomorphicNew():
     #
     '''
     # lets do the arms
-    fast_align_bones(cachedBonesData["lCollar"]["head"],cachedBonesData["lCollar"]["tail"] , vx_armature, "clavicle_joint.L",radians(0) ) # cachedBonesData["lCollar"]["roll"])
-    fast_align_bones(cachedBonesData["lShldrBend"]["head"],cachedBonesData["lForearmBend"]["head"] , vx_armature, "shoulder_joint.L", radians(90)) # cachedBonesData["lShldrBend"]["roll"])    
-    fast_align_bones(cachedBonesData["lShldrTwist"]["head"],cachedBonesData["lForearmBend"]["head"] , vx_armature, "shoulder_twist_joint.L", radians(90)) #cachedBonesData["lShldrTwist"]["roll"])        
-    fast_align_bones(cachedBonesData["lForearmBend"]["head"],cachedBonesData["lHand"]["head"] , vx_armature, "elbow_joint.L", radians(90)) #cachedBonesData["lForearmBend"]["roll"])    
-    fast_align_bones(cachedBonesData["lForearmTwist"]["head"],cachedBonesData["lHand"]["head"] , vx_armature, "forearm_twist_joint.L", radians(90)) #cachedBonesData["lForearmTwist"]["roll"])  
-    fast_align_bones(cachedBonesData["lHand"]["head"],cachedBonesData["lHand"]["tail"] , vx_armature, "wrist_joint.L", cachedBonesData["lHand"]["roll"])  
+    fast_align_bones(cachedBonesData["lCollar"]["head"],cachedBonesData["lCollar"]["tail"] , vx_armature, "clavicle.L",radians(0) ) # cachedBonesData["lCollar"]["roll"])
+    fast_align_bones(cachedBonesData["lShldrBend"]["head"],cachedBonesData["lForearmBend"]["head"] , vx_armature, "upperarm.L", radians(90)) # cachedBonesData["lShldrBend"]["roll"])
+    fast_align_bones(cachedBonesData["lShldrTwist"]["head"],cachedBonesData["lForearmBend"]["head"] , vx_armature, "upperarm_twist_01.L", radians(90)) #cachedBonesData["lShldrTwist"]["roll"])
+    fast_align_bones(cachedBonesData["lShldrTwist"]["head"],cachedBonesData["lForearmBend"]["head"] , vx_armature, "upperarm_twist_02.L", radians(90))
+    fast_align_bones(cachedBonesData["lForearmBend"]["head"],cachedBonesData["lHand"]["head"] , vx_armature, "lowerarm.L", radians(90)) #cachedBonesData["lForearmBend"]["roll"])
+    fast_align_bones(cachedBonesData["lForearmTwist"]["head"],cachedBonesData["lHand"]["head"] , vx_armature, "lowerarm_twist_01.L", radians(90)) #cachedBonesData["lForearmTwist"]["roll"])
+    fast_align_bones(cachedBonesData["lForearmTwist"]["head"],cachedBonesData["lHand"]["head"] , vx_armature, "lowerarm_twist_02.L", radians(90))
+    fast_align_bones(cachedBonesData["lHand"]["head"],cachedBonesData["lHand"]["tail"] , vx_armature, "hand.L", cachedBonesData["lHand"]["roll"])
     #
-    fast_align_bones(cachedBonesData["rCollar"]["head"],cachedBonesData["rCollar"]["tail"] , vx_armature, "clavicle_joint.R", radians(0) ) #cachedBonesData["rCollar"]["roll"])
-    fast_align_bones(cachedBonesData["rShldrBend"]["head"],cachedBonesData["rForearmBend"]["head"] , vx_armature, "shoulder_joint.R", radians(-90)) #cachedBonesData["rShldrBend"]["roll"])    
-    fast_align_bones(cachedBonesData["rShldrTwist"]["head"],cachedBonesData["rForearmBend"]["head"] , vx_armature, "shoulder_twist_joint.R", radians(-90)) #cachedBonesData["rShldrTwist"]["roll"])        
-    fast_align_bones(cachedBonesData["rForearmBend"]["head"],cachedBonesData["rHand"]["head"] , vx_armature, "elbow_joint.R", radians(-90)) #cachedBonesData["rForearmBend"]["roll"])    
-    fast_align_bones(cachedBonesData["rForearmTwist"]["head"],cachedBonesData["rHand"]["head"] , vx_armature, "forearm_twist_joint.R",  radians(-90)) #cachedBonesData["rForearmTwist"]["roll"])  
-    fast_align_bones(cachedBonesData["rHand"]["head"],cachedBonesData["rHand"]["tail"] , vx_armature, "wrist_joint.R", cachedBonesData["rHand"]["roll"])  
+    fast_align_bones(cachedBonesData["rCollar"]["head"],cachedBonesData["rCollar"]["tail"] , vx_armature, "clavicle.R", radians(0) ) #cachedBonesData["rCollar"]["roll"])
+    fast_align_bones(cachedBonesData["rShldrBend"]["head"],cachedBonesData["rForearmBend"]["head"] , vx_armature, "upperarm.R", radians(-90)) #cachedBonesData["rShldrBend"]["roll"])
+    fast_align_bones(cachedBonesData["rShldrTwist"]["head"],cachedBonesData["rForearmBend"]["head"] , vx_armature, "upperarm_twist_01.R", radians(-90)) #cachedBonesData["rShldrTwist"]["roll"])
+    fast_align_bones(cachedBonesData["rShldrTwist"]["head"],cachedBonesData["rForearmBend"]["head"] , vx_armature, "upperarm_twist_02.R", radians(-90))
+    fast_align_bones(cachedBonesData["rForearmBend"]["head"],cachedBonesData["rHand"]["head"] , vx_armature, "lowerarm.R", radians(-90)) #cachedBonesData["rForearmBend"]["roll"])
+    fast_align_bones(cachedBonesData["rForearmTwist"]["head"],cachedBonesData["rHand"]["head"] , vx_armature, "lowerarm_twist_01.R",  radians(-90)) #cachedBonesData["rForearmTwist"]["roll"])
+    fast_align_bones(cachedBonesData["rForearmTwist"]["head"],cachedBonesData["rHand"]["head"] , vx_armature, "lowerarm_twist_02.R",  radians(-90))
+    fast_align_bones(cachedBonesData["rHand"]["head"],cachedBonesData["rHand"]["tail"] , vx_armature, "hand.R", cachedBonesData["rHand"]["roll"])
     #
     for index, row in enumerate(dict_bones.finger_bones_matching):
         print("{} - {} - {}".format(row[0],row[1],row[2]))
@@ -254,130 +260,130 @@ def fixBreastJointEndsDifeomorphic(target_armature):
     armature_data = bpy.data.objects[target_armature]
     ebones = armature_data.data.edit_bones
     nipple_joint01_R = ebones["breastNipple.R"]
-    nipple_jointEnd_R = ebones["breastNipple_jointEnd.R"]
+    nipple_end_R = ebones["breastNipple_end.R"]
     matrix = breast_scale_joint_R.matrix.copy()
     nipple_joint01_R_head = nipple_joint01_R.head.copy()
     nipple_joint01_R_tail = nipple_joint01_R.tail.copy()
-    nipple_jointEnd_R_head = nipple_jointEnd_R.head.copy()
-    nipple_jointEnd_R_tail = nipple_jointEnd_R.tail.copy()
+    nipple_end_R_head = nipple_end_R.head.copy()
+    nipple_end_R_tail = nipple_end_R.tail.copy()
     #
     nipple_joint01_R.matrix = matrix
     nipple_joint01_R.head = nipple_joint01_R_head
     nipple_joint01_R.tail = nipple_joint01_R_tail
-    nipple_jointEnd_R.matrix = nipple_joint01_R.matrix.copy()
-    nipple_jointEnd_R.head = nipple_joint01_R.tail
-    nipple_jointEnd_R.tail = nipple_joint01_R.head
-    nipple_jointEnd_R.length *= -1
+    nipple_end_R.matrix = nipple_joint01_R.matrix.copy()
+    nipple_end_R.head = nipple_joint01_R.tail
+    nipple_end_R.tail = nipple_joint01_R.head
+    nipple_end_R.length *= -1
     #
     breast_deform02_joint01_R = ebones["breast_deform02_joint01.R"]
-    breast_deform02_jointEnd_R = ebones["breast_deform02_jointEnd.R"]
+    breast_deform02_end_R = ebones["breast_deform02_end.R"]
     matrix = breast_deform02_joint01_R.matrix.copy()
-    breast_deform02_jointEnd_R_head = breast_deform02_joint01_R.tail.copy()
-    breast_deform02_jointEnd_R_tail = breast_deform02_jointEnd_R.tail.copy()
+    breast_deform02_end_R_head = breast_deform02_joint01_R.tail.copy()
+    breast_deform02_end_R_tail = breast_deform02_end_R.tail.copy()
     length = breast_deform02_joint01_R.length
     breast_deform02_joint01_R.length *= 1.05 
-    breast_deform02_jointEnd_R.matrix = matrix
-    breast_deform02_jointEnd_R.head = breast_deform02_jointEnd_R_head
-    breast_deform02_jointEnd_R.tail = breast_deform02_joint01_R.tail.copy()
+    breast_deform02_end_R.matrix = matrix
+    breast_deform02_end_R.head = breast_deform02_end_R_head
+    breast_deform02_end_R.tail = breast_deform02_joint01_R.tail.copy()
     breast_deform02_joint01_R.length = length
     #
     breast_deform03_joint01_R = ebones["breast_deform03_joint01.R"]
-    breast_deform03_jointEnd_R = ebones["breast_deform03_jointEnd.R"]
+    breast_deform03_end_R = ebones["breast_deform03_end.R"]
     matrix = breast_deform03_joint01_R.matrix.copy()
-    breast_deform03_jointEnd_R_head = breast_deform03_joint01_R.tail.copy()
-    breast_deform03_jointEnd_R_tail = breast_deform03_jointEnd_R.tail.copy()
+    breast_deform03_end_R_head = breast_deform03_joint01_R.tail.copy()
+    breast_deform03_end_R_tail = breast_deform03_end_R.tail.copy()
     length = breast_deform03_joint01_R.length
     breast_deform03_joint01_R.length *= 1.05 
-    breast_deform03_jointEnd_R.matrix = matrix
-    breast_deform03_jointEnd_R.head = breast_deform03_jointEnd_R_head
-    breast_deform03_jointEnd_R.tail = breast_deform03_joint01_R.tail.copy()
+    breast_deform03_end_R.matrix = matrix
+    breast_deform03_end_R.head = breast_deform03_end_R_head
+    breast_deform03_end_R.tail = breast_deform03_joint01_R.tail.copy()
     breast_deform03_joint01_R.length = length
     #
     breast_deform03_joint01_R = ebones["breast_deform03_joint01.R"]
-    breast_deform03_jointEnd_R = ebones["breast_deform03_jointEnd.R"]
+    breast_deform03_end_R = ebones["breast_deform03_end.R"]
     matrix = breast_deform03_joint01_R.matrix.copy()
-    breast_deform03_jointEnd_R_head = breast_deform03_joint01_R.tail.copy()
-    breast_deform03_jointEnd_R_tail = breast_deform03_jointEnd_R.tail.copy()
+    breast_deform03_end_R_head = breast_deform03_joint01_R.tail.copy()
+    breast_deform03_end_R_tail = breast_deform03_end_R.tail.copy()
     length = breast_deform03_joint01_R.length
     breast_deform03_joint01_R.length *= 1.05 
-    breast_deform03_jointEnd_R.matrix = matrix
-    breast_deform03_jointEnd_R.head = breast_deform03_jointEnd_R_head
-    breast_deform03_jointEnd_R.tail = breast_deform03_joint01_R.tail.copy()
+    breast_deform03_end_R.matrix = matrix
+    breast_deform03_end_R.head = breast_deform03_end_R_head
+    breast_deform03_end_R.tail = breast_deform03_joint01_R.tail.copy()
     breast_deform03_joint01_R.length = length
     #
     breast_deform01_joint01_R = ebones["breast_deform01_joint01.R"]
-    breast_deform01_jointEnd_R = ebones["breast_deform01_jointEnd.R"]
+    breast_deform01_end_R = ebones["breast_deform01_end.R"]
     matrix = breast_deform01_joint01_R.matrix.copy()
-    breast_deform01_jointEnd_R_head = breast_deform01_joint01_R.tail.copy()
-    breast_deform01_jointEnd_R_tail = breast_deform01_jointEnd_R.tail.copy()
+    breast_deform01_end_R_head = breast_deform01_joint01_R.tail.copy()
+    breast_deform01_end_R_tail = breast_deform01_end_R.tail.copy()
     length = breast_deform01_joint01_R.length
     breast_deform01_joint01_R.length *= 1.05 
-    breast_deform01_jointEnd_R.matrix = matrix
-    breast_deform01_jointEnd_R.head = breast_deform01_jointEnd_R_head
-    breast_deform01_jointEnd_R.tail = breast_deform01_joint01_R.tail.copy()
+    breast_deform01_end_R.matrix = matrix
+    breast_deform01_end_R.head = breast_deform01_end_R_head
+    breast_deform01_end_R.tail = breast_deform01_joint01_R.tail.copy()
     breast_deform01_joint01_R.length = length
     breast_scale_joint_L = ebones["breast_scale_joint.L"]
     nipple_joint01_L = ebones["nipple_joint01.L"]
-    nipple_jointEnd_L = ebones["nipple_jointEnd.L"]
+    nipple_end_L = ebones["nipple_end.L"]
     matrix = breast_scale_joint_L.matrix.copy()
     nipple_joint01_L_head = nipple_joint01_L.head.copy()
     nipple_joint01_L_tail = nipple_joint01_L.tail.copy()
-    nipple_jointEnd_L_head = nipple_jointEnd_L.head.copy()
-    nipple_jointEnd_L_tail = nipple_jointEnd_L.tail.copy()
+    nipple_end_L_head = nipple_end_L.head.copy()
+    nipple_end_L_tail = nipple_end_L.tail.copy()
     nipple_joint01_L.matrix = matrix
     nipple_joint01_L.head = nipple_joint01_L_head
     nipple_joint01_L.tail = nipple_joint01_L_tail
-    nipple_jointEnd_L.matrix = nipple_joint01_L.matrix.copy()
-    nipple_jointEnd_L.head = nipple_joint01_L.tail
-    nipple_jointEnd_L.tail = nipple_joint01_L.head
-    nipple_jointEnd_L.length *= -1
+    nipple_end_L.matrix = nipple_joint01_L.matrix.copy()
+    nipple_end_L.head = nipple_joint01_L.tail
+    nipple_end_L.tail = nipple_joint01_L.head
+    nipple_end_L.length *= -1
     #
     breast_deform02_joint01_L = ebones["breast_deform02_joint01.L"]
-    breast_deform02_jointEnd_L = ebones["breast_deform02_jointEnd.L"]
+    breast_deform02_end_L = ebones["breast_deform02_end.L"]
     matrix = breast_deform02_joint01_L.matrix.copy()
-    breast_deform02_jointEnd_L_head = breast_deform02_joint01_L.tail.copy()
-    breast_deform02_jointEnd_L_tail = breast_deform02_jointEnd_L.tail.copy()
+    breast_deform02_end_L_head = breast_deform02_joint01_L.tail.copy()
+    breast_deform02_end_L_tail = breast_deform02_end_L.tail.copy()
     length = breast_deform02_joint01_L.length
     breast_deform02_joint01_L.length *= 1.05 
-    breast_deform02_jointEnd_L.matrix = matrix
-    breast_deform02_jointEnd_L.head = breast_deform02_jointEnd_L_head
-    breast_deform02_jointEnd_L.tail = breast_deform02_joint01_L.tail.copy()
+    breast_deform02_end_L.matrix = matrix
+    breast_deform02_end_L.head = breast_deform02_end_L_head
+    breast_deform02_end_L.tail = breast_deform02_joint01_L.tail.copy()
     breast_deform02_joint01_L.length = length
     #
     breast_deform03_joint01_L = ebones["breast_deform03_joint01.L"]
-    breast_deform03_jointEnd_L = ebones["breast_deform03_jointEnd.L"]
+    breast_deform03_end_L = ebones["breast_deform03_end.L"]
     matrix = breast_deform03_joint01_L.matrix.copy()
-    breast_deform03_jointEnd_L_head = breast_deform03_joint01_L.tail.copy()
-    breast_deform03_jointEnd_L_tail = breast_deform03_jointEnd_L.tail.copy()
+    breast_deform03_end_L_head = breast_deform03_joint01_L.tail.copy()
+    breast_deform03_end_L_tail = breast_deform03_end_L.tail.copy()
     length = breast_deform03_joint01_L.length
     breast_deform03_joint01_L.length *= 1.05 
-    breast_deform03_jointEnd_L.matrix = matrix
-    breast_deform03_jointEnd_L.head = breast_deform03_jointEnd_L_head
-    breast_deform03_jointEnd_L.tail = breast_deform03_joint01_L.tail.copy()
+    breast_deform03_end_L.matrix = matrix
+    breast_deform03_end_L.head = breast_deform03_end_L_head
+    breast_deform03_end_L.tail = breast_deform03_joint01_L.tail.copy()
     breast_deform03_joint01_L.length = length
     #
     breast_deform03_joint01_L = ebones["breast_deform03_joint01.L"]
-    breast_deform03_jointEnd_L = ebones["breast_deform03_jointEnd.L"]
+    breast_deform03_end_L = ebones["breast_deform03_end.L"]
     matrix = breast_deform03_joint01_L.matrix.copy()
-    breast_deform03_jointEnd_L_head = breast_deform03_joint01_L.tail.copy()
-    breast_deform03_jointEnd_L_tail = breast_deform03_jointEnd_L.tail.copy()
+    breast_deform03_end_L_head = breast_deform03_joint01_L.tail.copy()
+    breast_deform03_end_L_tail = breast_deform03_end_L.tail.copy()
     length = breast_deform03_joint01_L.length
     breast_deform03_joint01_L.length *= 1.05 
-    breast_deform03_jointEnd_L.matrix = matrix
-    breast_deform03_jointEnd_L.head = breast_deform03_jointEnd_L_head
-    breast_deform03_jointEnd_L.tail = breast_deform03_joint01_L.tail.copy()
+    breast_deform03_end_L.matrix = matrix
+    breast_deform03_end_L.head = breast_deform03_end_L_head
+    breast_deform03_end_L.tail = breast_deform03_joint01_L.tail.copy()
     breast_deform03_joint01_L.length = length
     #
     breast_deform01_joint01_L = ebones["breast_deform01_joint01.L"]
-    breast_deform01_jointEnd_L = ebones["breast_deform01_jointEnd.L"]
+    breast_deform01_end_L = ebones["breast_deform01_end.L"]
     matrix = breast_deform01_joint01_L.matrix.copy()
-    breast_deform01_jointEnd_L_head = breast_deform01_joint01_L.tail.copy()
-    breast_deform01_jointEnd_L_tail = breast_deform01_jointEnd_L.tail.copy()
+    breast_deform01_end_L_head = breast_deform01_joint01_L.tail.copy()
+    breast_deform01_end_L_tail = breast_deform01_end_L.tail.copy()
     length = breast_deform01_joint01_L.length
     breast_deform01_joint01_L.length *= 1.05 
-    breast_deform01_jointEnd_L.matrix = matrix
-    breast_deform01_jointEnd_L.head = breast_deform01_jointEnd_L_head
-    breast_deform01_jointEnd_L.tail = breast_deform01_joint01_L.tail.copy()
+    breast_deform01_end_L.matrix = matrix
+    breast_deform01_end_L.head = breast_deform01_end_L_head
+    breast_deform01_end_L.tail = breast_deform01_joint01_L.tail.copy()
     breast_deform01_joint01_L.length = length
 
 
@@ -393,10 +399,7 @@ def fixHeadJointsDifeomorphic(target_armature):
     armature_data = bpy.data.objects[target_armature]
     ebones = armature_data.data.edit_bones
     #
-    ebones["head_joint02"].tail.y = ebones["head_joint02"].head.y
-    ebones["head_joint01"].tail.y = ebones["head_joint02"].head.y
-    ebones["head_joint01"].head.y = ebones["head_joint02"].head.y
-    ebones["head_joint01"].head.z = ebones["head_joint02"].head.z
+    ebones["head"].tail.y = ebones["head"].head.y
 
 
 def fixSpineJointsDifeomorphic(target_armature):
@@ -411,8 +414,8 @@ def fixSpineJointsDifeomorphic(target_armature):
     armature_data = bpy.data.objects[target_armature]
     ebones = armature_data.data.edit_bones
     #
-    ebones["spine_jointEnd"].tail = ebones["neck_joint01"].head
-    boneArray = ["spine_joint01","spine_joint02","spine_joint03","spine_joint04","spine_jointEnd"]
+    ebones["spine_05"].tail = ebones["neck_01"].head
+    boneArray = ["spine_01","spine_02","spine_03","spine_04","spine_05"]
     makeBonesCollinearFromBoneHeadToBoneTail("Armature", boneArray)
 
 
@@ -891,21 +894,21 @@ def armatureMakeFriendlyIKJoints(ob):
     
     center=dict()
     k = 1
-    list_of_bones = ["hip_joint","knee_joint","ankle_joint","ball_joint","thigh_twist_joint"]
+    list_of_bones = ["thigh","calf","foot","ball","thigh_twist_01","thigh_twist_02"]
 
-    
+
     difeomorphic_body = "Genesis 3 Female Mesh"
     if difeomorphic_body in bpy.data.objects:
         obj = bpy.data.objects[difeomorphic_body]
         center["centerX.L"]= getCenter (knee_centerX_L, obj )[0]
         center["centerX.R"]= getCenter (knee_centerX_R, obj )[0]
     else:
-        center["centerX.L"]= armature.edit_bones["knee_joint.L"].head.x
-        center["centerX.R"]= armature.edit_bones["knee_joint.R"].head.x
+        center["centerX.L"]= armature.edit_bones["calf.L"].head.x
+        center["centerX.R"]= armature.edit_bones["calf.R"].head.x
         #for suffix in [".L",".R"]:
         #    for bonename in list_of_bones:
         #        ebone = armature.edit_bones[bonename+suffix]
-    
+
     for suffix in [".L",".R"]:
         if suffix == ".R":
             k = -1
@@ -915,19 +918,22 @@ def armatureMakeFriendlyIKJoints(ob):
             ebone.tail.x = center["centerX"+suffix]
 
 
-        armature.edit_bones["hip_joint"+suffix].tail = armature.edit_bones["knee_joint"+suffix].head
-        armature.edit_bones["knee_joint"+suffix].tail = armature.edit_bones["ankle_joint"+suffix].head
-        armature.edit_bones["ankle_joint"+suffix].tail = armature.edit_bones["ball_joint"+suffix].head
-        #armature.edit_bones["toe_joint"+suffix].head =  armature.edit_bones["ball_joint"+suffix].tail
-        armature.edit_bones["thigh_twist_joint"+suffix].tail = armature.edit_bones["knee_joint"+suffix].head
-        armature.edit_bones["thigh_twist_joint"+suffix].head = (armature.edit_bones["hip_joint"+suffix].head+armature.edit_bones["hip_joint"+suffix].tail)/2
+        armature.edit_bones["thigh"+suffix].tail = armature.edit_bones["calf"+suffix].head
+        armature.edit_bones["calf"+suffix].tail = armature.edit_bones["foot"+suffix].head
+        armature.edit_bones["foot"+suffix].tail = armature.edit_bones["ball"+suffix].head
+        #armature.edit_bones["toe_joint"+suffix].head =  armature.edit_bones["ball"+suffix].tail
+        armature.edit_bones["thigh_twist_01"+suffix].tail = armature.edit_bones["calf"+suffix].head
+        armature.edit_bones["thigh_twist_01"+suffix].head = (armature.edit_bones["thigh"+suffix].head+armature.edit_bones["thigh"+suffix].tail)/2
+        armature.edit_bones["thigh_twist_02"+suffix].tail = armature.edit_bones["calf"+suffix].head
+        armature.edit_bones["thigh_twist_02"+suffix].head = (armature.edit_bones["thigh"+suffix].head+armature.edit_bones["thigh"+suffix].tail)/2
 
-        armature.edit_bones["hip_joint"+suffix].roll = radians(0)
-        armature.edit_bones["knee_joint"+suffix].roll = radians(0)
-        armature.edit_bones["ankle_joint"+suffix].roll = radians(90) #kradians(180) * k
-        armature.edit_bones["ball_joint"+suffix].roll = radians(90) #radians(180) * k
+        armature.edit_bones["thigh"+suffix].roll = radians(0)
+        armature.edit_bones["calf"+suffix].roll = radians(0)
+        armature.edit_bones["foot"+suffix].roll = radians(90) #kradians(180) * k
+        armature.edit_bones["ball"+suffix].roll = radians(90) #radians(180) * k
 
-        armature.edit_bones["thigh_twist_joint"+suffix].roll = radians(0)
+        armature.edit_bones["thigh_twist_01"+suffix].roll = radians(0)
+        armature.edit_bones["thigh_twist_02"+suffix].roll = radians(0)
 
         #armature.edit_bones["toe_joint"+suffix].length =  0.025
         #armature.edit_bones["toe_joint"+suffix].roll = radians(0) 
@@ -939,21 +945,21 @@ def armatureMakeFriendlyIKJoints(ob):
 
     center.clear()
     k = 1
-    list_of_bones = ["shoulder_joint","elbow_joint","wrist_joint","shoulder_twist_joint","forearm_twist_joint"]
+    list_of_bones = ["upperarm","lowerarm","hand","upperarm_twist_01","upperarm_twist_02","lowerarm_twist_01","lowerarm_twist_02"]
 
-    
+
     difeomorphic_body = "Genesis 3 Female Mesh"
     if difeomorphic_body in bpy.data.objects:
         obj = bpy.data.objects[difeomorphic_body]
         center["centerX.L"]= getCenter (elbow_center_L, obj )[2]
         center["centerX.R"]= getCenter (elbow_center_R, obj )[2]
     else:
-        center["centerX.L"]= armature.edit_bones["elbow_joint.L"].head.z
-        center["centerX.R"]= armature.edit_bones["elbow_joint.R"].head.z
+        center["centerX.L"]= armature.edit_bones["lowerarm.L"].head.z
+        center["centerX.R"]= armature.edit_bones["lowerarm.R"].head.z
         #for suffix in [".L",".R"]:
         #    for bonename in list_of_bones:
         #        ebone = armature.edit_bones[bonename+suffix]
-    
+
     for suffix in [".L",".R"]:
         if suffix == ".R":
             k = -1
@@ -962,17 +968,20 @@ def armatureMakeFriendlyIKJoints(ob):
             ebone.head.z = center["centerX"+suffix]
             ebone.tail.z = center["centerX"+suffix]
         #
-        armature.edit_bones["shoulder_joint"+suffix].tail = armature.edit_bones["elbow_joint"+suffix].head
-        armature.edit_bones["elbow_joint"+suffix].tail = armature.edit_bones["wrist_joint"+suffix].head
-        armature.edit_bones["shoulder_twist_joint"+suffix].tail = armature.edit_bones["elbow_joint"+suffix].head
-        armature.edit_bones["shoulder_twist_joint"+suffix].head = (armature.edit_bones["shoulder_joint"+suffix].head+armature.edit_bones["shoulder_joint"+suffix].tail)/2
-        armature.edit_bones["forearm_twist_joint"+suffix].head = (armature.edit_bones["elbow_joint"+suffix].head+armature.edit_bones["elbow_joint"+suffix].tail)/2
+        armature.edit_bones["upperarm"+suffix].tail = armature.edit_bones["lowerarm"+suffix].head
+        armature.edit_bones["lowerarm"+suffix].tail = armature.edit_bones["hand"+suffix].head
+        armature.edit_bones["upperarm_twist_01"+suffix].tail = armature.edit_bones["lowerarm"+suffix].head
+        armature.edit_bones["upperarm_twist_01"+suffix].head = (armature.edit_bones["upperarm"+suffix].head+armature.edit_bones["upperarm"+suffix].tail)/2
+        armature.edit_bones["upperarm_twist_02"+suffix].tail = armature.edit_bones["lowerarm"+suffix].head
+        armature.edit_bones["upperarm_twist_02"+suffix].head = (armature.edit_bones["upperarm"+suffix].head+armature.edit_bones["upperarm"+suffix].tail)/2
+        armature.edit_bones["lowerarm_twist_01"+suffix].head = (armature.edit_bones["lowerarm"+suffix].head+armature.edit_bones["lowerarm"+suffix].tail)/2
+        armature.edit_bones["lowerarm_twist_02"+suffix].head = (armature.edit_bones["lowerarm"+suffix].head+armature.edit_bones["lowerarm"+suffix].tail)/2
         #
-        #armature.edit_bones["shoulder_joint"+suffix].roll = radians(90)
-        #armature.edit_bones["elbow_joint"+suffix].roll = radians(90)
+        #armature.edit_bones["upperarm"+suffix].roll = radians(90)
+        #armature.edit_bones["lowerarm"+suffix].roll = radians(90)
         #
-        #armature.edit_bones["shoulder_twist_joint"+suffix].roll = radians(90)
-        #armature.edit_bones["forearm_twist_joint"+suffix].roll = radians(90)
+        #armature.edit_bones["upperarm_twist_01"+suffix].roll = radians(90)
+        #armature.edit_bones["lowerarm_twist_01"+suffix].roll = radians(90)
     #
     startBone = "breast_joint.L"
     endBone = "breast_scale_joint.L"

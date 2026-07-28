@@ -1,0 +1,38 @@
+[
+    {
+        "name": "butt.L",
+        "head": [ "0.072273", "0.077040", "0.955564" ],
+        "tail": [ "0.074250", "0.144871", "0.955564" ],
+        "roll": "0.000004",
+        "parent": "pelvis",
+        "connected": false,
+        "deform": true
+    },
+    {
+        "name": "butt_end.L",
+        "head": [ "0.074250", "0.144871", "0.955564" ],
+        "tail": [ "0.094250", "0.144871", "0.955564" ],
+        "roll": "0.000002",
+        "parent": "butt.L",
+        "connected": false,
+        "deform": true
+    },
+    {
+        "name": "butt.R",
+        "head": [ "-0.072273", "0.077040", "0.955564" ],
+        "tail": [ "-0.074250", "0.144871", "0.955564" ],
+        "roll": "0.000000",
+        "parent": "pelvis",
+        "connected": false,
+        "deform": true
+    },
+    {
+        "name": "butt_end.R",
+        "head": [ "-0.074249", "0.144874", "0.955577" ],
+        "tail": [ "-0.094249", "0.144874", "0.955577" ],
+        "roll": "0.000001",
+        "parent": "butt.R",
+        "connected": false,
+        "deform": true
+    }
+]

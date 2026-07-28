@@ -3,8 +3,8 @@ ebones["nipple_joint01.R"].length *= 2
 nipple_joint01_R_tail_doubled = ebones["nipple_joint01.R"].tail.copy()
 ebones["nipple_joint01.R"].length /= 2
 
-ebones["nipple_jointEnd.R"].head = amwi * nipple_joint01_R_tail
-ebones["nipple_jointEnd.R"].tail = nipple_joint01_R_tail_doubled
+ebones["nipple_end.R"].head = amwi * nipple_joint01_R_tail
+ebones["nipple_end.R"].tail = nipple_joint01_R_tail_doubled
 
 
 #deform01
@@ -16,8 +16,8 @@ breast_deform01_joint01_R_tail_longer = ebones["breast_deform01_joint01.R"].tail
 ebones["breast_deform01_joint01.R"].length -= 	deform01_length*0.1							#fix the tail
 #ebones["breast_deform01_joint01.R"].tail = amwi * breast_deform01_joint01_R_tail 	
 
-ebones["breast_deform01_jointEnd.R"].head = amwi * breast_deform01_joint01_R_tail
-ebones["breast_deform01_jointEnd.R"].tail = breast_deform01_joint01_R_tail_longer
+ebones["breast_deform01_end.R"].head = amwi * breast_deform01_joint01_R_tail
+ebones["breast_deform01_end.R"].tail = breast_deform01_joint01_R_tail_longer
 
 #deform02
 ebones["breast_deform02_joint01.R"].head = amwi * breast_joint_R_tail
@@ -28,8 +28,8 @@ breast_deform02_joint01_R_tail_longer = ebones["breast_deform02_joint01.R"].tail
 ebones["breast_deform02_joint01.R"].length -= 	deform02_length*0.1							#fix the tail
 #ebones["breast_deform02_joint01.R"].tail = amwi * breast_deform02_joint01_R_tail 	
 
-ebones["breast_deform02_jointEnd.R"].head = amwi * breast_deform02_joint01_R_tail
-ebones["breast_deform02_jointEnd.R"].tail = breast_deform02_joint01_R_tail_longer
+ebones["breast_deform02_end.R"].head = amwi * breast_deform02_joint01_R_tail
+ebones["breast_deform02_end.R"].tail = breast_deform02_joint01_R_tail_longer
 
 #deform03
 ebones["breast_deform03_joint01.R"].head = amwi * breast_joint_R_tail
@@ -40,8 +40,8 @@ breast_deform03_joint01_R_tail_longer = ebones["breast_deform03_joint01.R"].tail
 ebones["breast_deform03_joint01.R"].length -= 	deform03_length*0.1							#fix the tail
 #ebones["breast_deform03_joint01.R"].tail = amwi * breast_deform03_joint01_R_tail 	
 
-ebones["breast_deform03_jointEnd.R"].head = amwi * breast_deform03_joint01_R_tail
-ebones["breast_deform03_jointEnd.R"].tail = breast_deform03_joint01_R_tail_longer
+ebones["breast_deform03_end.R"].head = amwi * breast_deform03_joint01_R_tail
+ebones["breast_deform03_end.R"].tail = breast_deform03_joint01_R_tail_longer
 
 
 

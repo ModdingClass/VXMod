@@ -9,6 +9,14 @@ from ..g3f.difeomorphic_workflow_armature_utils import *
 def getArmatureBonesDictFromBreastVertices(bones_dict):
     print("getArmatureBonesFromBreastVertices()...")
     armature_data = bpy.data.objects['Armature']
+    breast_bone_names = [
+        "nipple_joint01.R", "nipple_end.R", "nipple_joint01.L", "nipple_end.L",
+        "breast_scale_joint.L", "breast_top_joint.L", "breast_bottom_joint.L",
+        "breast_outer_joint.L", "breast_inner_joint.L",
+        "breast_scale_joint.R", "breast_top_joint.R", "breast_bottom_joint.R",
+        "breast_outer_joint.R", "breast_inner_joint.R",
+    ]
+    has_breast = any(b in armature_data.data.bones for b in breast_bone_names)
     amw = armature_data.matrix_world
     amwi = amw.inverted()
     amwi = Matrix.Identity(4)
@@ -68,10 +76,11 @@ def getArmatureBonesDictFromBreastVertices(bones_dict):
 
     #bones_dict["breast_joint.R"]= {"head" : amwi * breast_dz_joint_R_head, "tail" : amwi * nipple_joint01_R_head, "roll" : 0, "rollOverride" : 0, "connected" : False }
     #bones_dict["breast_joint.L"]= {"head" : amwi * breast_dz_joint_L_head, "tail" : amwi * nipple_joint01_L_head, "roll" : 0, "rollOverride" : 0, "connected" : False }
-    bones_dict["nipple_joint01.R"]= {"head" : amwi * nipple_joint01_R_head, "tail" : amwi * nipple_joint01_R_tail, "roll" : -2, "rollOverride" : 0, "connected" : False }
-    bones_dict["nipple_jointEnd.R"]= {"head" : amwi * nipple_joint01_R_tail, "tail" : amwi * nipple_joint01_R_tail + extra, "roll" : 90, "rollOverride" : 0, "connected" : False }
-    bones_dict["nipple_joint01.L"]= {"head" : amwi * nipple_joint01_L_head, "tail" : amwi * nipple_joint01_L_tail, "roll" : 2, "rollOverride" : 0, "connected" : False }
-    bones_dict["nipple_jointEnd.L"]= {"head" : amwi * nipple_joint01_L_tail, "tail" : amwi * nipple_joint01_L_tail + extra, "roll" : -90, "rollOverride" : 0, "connected" : False }
+    if has_breast:
+        bones_dict["nipple_joint01.R"]= {"head" : amwi * nipple_joint01_R_head, "tail" : amwi * nipple_joint01_R_tail, "roll" : -2, "rollOverride" : 0, "connected" : False }
+        bones_dict["nipple_end.R"]= {"head" : amwi * nipple_joint01_R_tail, "tail" : amwi * nipple_joint01_R_tail + extra, "roll" : 90, "rollOverride" : 0, "connected" : False }
+        bones_dict["nipple_joint01.L"]= {"head" : amwi * nipple_joint01_L_head, "tail" : amwi * nipple_joint01_L_tail, "roll" : 2, "rollOverride" : 0, "connected" : False }
+        bones_dict["nipple_end.L"]= {"head" : amwi * nipple_joint01_L_tail, "tail" : amwi * nipple_joint01_L_tail + extra, "roll" : -90, "rollOverride" : 0, "connected" : False }
 
     '''
     #right
@@ -81,17 +90,17 @@ def getArmatureBonesDictFromBreastVertices(bones_dict):
     bones_dict["breast_scale_joint.R"]= {"head" : amwi * breast_scale_joint_R_head, "tail" : amwi * breast_scale_joint_R_tail, "roll" : -7.2, "rollOverride" : 0, "connected" : False }
 
     bones_dict["nipple_joint01.R"]= {"head" : amwi * nipple_joint01_R_head, "tail" : amwi * nipple_joint01_R_tail, "roll" : -2, "rollOverride" : 0, "connected" : False }
-    bones_dict["nipple_jointEnd.R"]= {"head" : amwi * nipple_joint01_R_tail, "tail" : amwi * nipple_joint01_R_tail + extra, "roll" : 90, "rollOverride" : 0, "connected" : False }
+    bones_dict["nipple_end.R"]= {"head" : amwi * nipple_joint01_R_tail, "tail" : amwi * nipple_joint01_R_tail + extra, "roll" : 90, "rollOverride" : 0, "connected" : False }
 
 
     bones_dict["breast_deform01_joint01.R"]= {"head" : amwi * breast_joint_R_tail, "tail" : amwi * breast_deform01_joint01_R_tail, "roll" : 152, "rollOverride" : 0, "connected" : False }
-    bones_dict["breast_deform01_jointEnd.R"]= {"head" : amwi * breast_deform01_joint01_R_tail, "tail" : amwi * breast_deform01_joint01_R_tail + extra, "roll" : 152, "rollOverride" : 0, "connected" : False }
+    bones_dict["breast_deform01_end.R"]= {"head" : amwi * breast_deform01_joint01_R_tail, "tail" : amwi * breast_deform01_joint01_R_tail + extra, "roll" : 152, "rollOverride" : 0, "connected" : False }
 
     bones_dict["breast_deform02_joint01.R"]= {"head" : amwi * breast_joint_R_tail, "tail" : amwi * breast_deform02_joint01_R_tail, "roll" : 147, "rollOverride" : 0, "connected" : False }
-    bones_dict["breast_deform02_jointEnd.R"]= {"head" : amwi * breast_deform02_joint01_R_tail, "tail" : amwi * breast_deform02_joint01_R_tail + extra, "roll" : 147, "rollOverride" : 0, "connected" : False }
+    bones_dict["breast_deform02_end.R"]= {"head" : amwi * breast_deform02_joint01_R_tail, "tail" : amwi * breast_deform02_joint01_R_tail + extra, "roll" : 147, "rollOverride" : 0, "connected" : False }
 
     bones_dict["breast_deform03_joint01.R"]= {"head" : amwi * breast_joint_R_tail, "tail" : amwi * breast_deform03_joint01_R_tail, "roll" : -35, "rollOverride" : 0, "connected" : False }
-    bones_dict["breast_deform03_jointEnd.R"]= {"head" : amwi * breast_deform03_joint01_R_tail, "tail" : amwi * breast_deform03_joint01_R_tail + extra, "roll" : -35, "rollOverride" : 0, "connected" : False }
+    bones_dict["breast_deform03_end.R"]= {"head" : amwi * breast_deform03_joint01_R_tail, "tail" : amwi * breast_deform03_joint01_R_tail + extra, "roll" : -35, "rollOverride" : 0, "connected" : False }
 
 
     #left
@@ -101,17 +110,17 @@ def getArmatureBonesDictFromBreastVertices(bones_dict):
     bones_dict["breast_scale_joint.L"]= {"head" : amwi * breast_scale_joint_L_head, "tail" : amwi * breast_scale_joint_L_tail, "roll" : 7.2, "rollOverride" : 0, "connected" : False }
 
     bones_dict["nipple_joint01.L"]= {"head" : amwi * nipple_joint01_L_head, "tail" : amwi * nipple_joint01_L_tail, "roll" : 2, "rollOverride" : 0, "connected" : False }
-    bones_dict["nipple_jointEnd.L"]= {"head" : amwi * nipple_joint01_L_tail, "tail" : amwi * nipple_joint01_L_tail + extra, "roll" : -90, "rollOverride" : 0, "connected" : False }
+    bones_dict["nipple_end.L"]= {"head" : amwi * nipple_joint01_L_tail, "tail" : amwi * nipple_joint01_L_tail + extra, "roll" : -90, "rollOverride" : 0, "connected" : False }
 
 
     bones_dict["breast_deform01_joint01.L"]= {"head" : amwi * breast_joint_L_tail, "tail" : amwi * breast_deform01_joint01_L_tail, "roll" : -152, "rollOverride" : 0, "connected" : False }
-    bones_dict["breast_deform01_jointEnd.L"]= {"head" : amwi * breast_deform01_joint01_L_tail, "tail" : amwi * breast_deform01_joint01_L_tail + extra, "roll" : -152, "rollOverride" : 0, "connected" : False }
+    bones_dict["breast_deform01_end.L"]= {"head" : amwi * breast_deform01_joint01_L_tail, "tail" : amwi * breast_deform01_joint01_L_tail + extra, "roll" : -152, "rollOverride" : 0, "connected" : False }
 
     bones_dict["breast_deform02_joint01.L"]= {"head" : amwi * breast_joint_L_tail, "tail" : amwi * breast_deform02_joint01_L_tail, "roll" : -147, "rollOverride" : 0, "connected" : False }
-    bones_dict["breast_deform02_jointEnd.L"]= {"head" : amwi * breast_deform02_joint01_L_tail, "tail" : amwi * breast_deform02_joint01_L_tail + extra, "roll" : -147, "rollOverride" : 0, "connected" : False }
+    bones_dict["breast_deform02_end.L"]= {"head" : amwi * breast_deform02_joint01_L_tail, "tail" : amwi * breast_deform02_joint01_L_tail + extra, "roll" : -147, "rollOverride" : 0, "connected" : False }
 
     bones_dict["breast_deform03_joint01.L"]= {"head" : amwi * breast_joint_L_tail, "tail" : amwi * breast_deform03_joint01_L_tail, "roll" : 35, "rollOverride" : 0, "connected" : False }
-    bones_dict["breast_deform03_jointEnd.L"]= {"head" : amwi * breast_deform03_joint01_L_tail, "tail" : amwi * breast_deform03_joint01_L_tail + extra, "roll" : 35, "rollOverride" : 0, "connected" : False }
+    bones_dict["breast_deform03_end.L"]= {"head" : amwi * breast_deform03_joint01_L_tail, "tail" : amwi * breast_deform03_joint01_L_tail + extra, "roll" : 35, "rollOverride" : 0, "connected" : False }
     '''
 
     #left side
@@ -202,11 +211,12 @@ def getArmatureBonesDictFromBreastVertices(bones_dict):
     # Ray cast for inner location
     result, inner_location, normal, index = obj.ray_cast(stop_global, direction_global_inner)
 
-    bones_dict["breast_scale_joint.L"]= {"head" : amwi * stop_position, "tail" : amwi * start_position, "roll" : 0, "rollOverride" : 0, "connected" : False }
-    bones_dict["breast_top_joint.L"]= {"head" : amwi * stop_position, "tail" : amwi * top_location, "roll" : 0, "rollOverride" : 0, "connected" : False }    
-    bones_dict["breast_bottom_joint.L"]= {"head" : amwi * stop_position, "tail" : amwi * bottom_location, "roll" : 0, "rollOverride" : 0, "connected" : False }        
-    bones_dict["breast_outer_joint.L"]= {"head" : amwi * stop_position, "tail" : amwi * outer_location, "roll" : 0, "rollOverride" : 0, "connected" : False }        
-    bones_dict["breast_inner_joint.L"]= {"head" : amwi * stop_position, "tail" : amwi * inner_location, "roll" : 0, "rollOverride" : 0, "connected" : False }        
+    if has_breast:
+        bones_dict["breast_scale_joint.L"]= {"head" : amwi * stop_position, "tail" : amwi * start_position, "roll" : 0, "rollOverride" : 0, "connected" : False }
+        bones_dict["breast_top_joint.L"]= {"head" : amwi * stop_position, "tail" : amwi * top_location, "roll" : 0, "rollOverride" : 0, "connected" : False }
+        bones_dict["breast_bottom_joint.L"]= {"head" : amwi * stop_position, "tail" : amwi * bottom_location, "roll" : 0, "rollOverride" : 0, "connected" : False }
+        bones_dict["breast_outer_joint.L"]= {"head" : amwi * stop_position, "tail" : amwi * outer_location, "roll" : 0, "rollOverride" : 0, "connected" : False }
+        bones_dict["breast_inner_joint.L"]= {"head" : amwi * stop_position, "tail" : amwi * inner_location, "roll" : 0, "rollOverride" : 0, "connected" : False }
 
 
     #right side
@@ -298,11 +308,12 @@ def getArmatureBonesDictFromBreastVertices(bones_dict):
     # Ray cast for inner location
     result, inner_location, normal, index = obj.ray_cast(stop_global, direction_global_inner)
 
-    bones_dict["breast_scale_joint.R"]= {"head" : amwi * stop_position, "tail" : amwi * start_position, "roll" : 0, "rollOverride" : 0, "connected" : False }
-    bones_dict["breast_top_joint.R"]= {"head" : amwi * stop_position, "tail" : amwi * top_location, "roll" : 0, "rollOverride" : 0, "connected" : False }    
-    bones_dict["breast_bottom_joint.R"]= {"head" : amwi * stop_position, "tail" : amwi * bottom_location, "roll" : 0, "rollOverride" : 0, "connected" : False }        
-    bones_dict["breast_outer_joint.R"]= {"head" : amwi * stop_position, "tail" : amwi * outer_location, "roll" : 0, "rollOverride" : 0, "connected" : False }        
-    bones_dict["breast_inner_joint.R"]= {"head" : amwi * stop_position, "tail" : amwi * inner_location, "roll" : 0, "rollOverride" : 0, "connected" : False }        
+    if has_breast:
+        bones_dict["breast_scale_joint.R"]= {"head" : amwi * stop_position, "tail" : amwi * start_position, "roll" : 0, "rollOverride" : 0, "connected" : False }
+        bones_dict["breast_top_joint.R"]= {"head" : amwi * stop_position, "tail" : amwi * top_location, "roll" : 0, "rollOverride" : 0, "connected" : False }
+        bones_dict["breast_bottom_joint.R"]= {"head" : amwi * stop_position, "tail" : amwi * bottom_location, "roll" : 0, "rollOverride" : 0, "connected" : False }
+        bones_dict["breast_outer_joint.R"]= {"head" : amwi * stop_position, "tail" : amwi * outer_location, "roll" : 0, "rollOverride" : 0, "connected" : False }
+        bones_dict["breast_inner_joint.R"]= {"head" : amwi * stop_position, "tail" : amwi * inner_location, "roll" : 0, "rollOverride" : 0, "connected" : False }        
 
 
 

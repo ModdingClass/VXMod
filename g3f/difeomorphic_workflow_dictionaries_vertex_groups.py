@@ -27,9 +27,9 @@ head_weights = ['head', 'upperTeeth', 'lowerJaw', 'lEye', 'rEye', 'lEar', 'rEar'
 head_weights_matching = [
 # source bone used for head, source bone used for tail, target bone
 
-["head", "head", "head_joint02"],
+["head", "head", "head"],
 ["Chin", "Chin", "chin_joint01"],
-["LipBelow",  "BelowJaw", "lower_jaw_jointEnd"],
+["LipBelow",  "BelowJaw", "lower_jaw_end"],
 ["lowerJaw","lJawClench","rJawClench","lower_jaw_joint01"],
 ["Nose","MidNoseBridge","lNostril","rNostril","nose_joint02"],
 ["lNasolabialUpper","lNasolabialMiddle","lCheekUpper","lCheekLower","cheek_joint01.L"],
@@ -44,8 +44,8 @@ head_weights_matching = [
 ["lLipLowerInner","lower_lip_joint03.L"],
 ["rLipLowerInner","lower_lip_joint03.R"],
 
-["LipLowerMiddle","lower_lip_jointEnd.L"],
-["LipLowerMiddle","lower_lip_jointEnd.R"],
+["LipLowerMiddle","lower_lip_end.L"],
+["LipLowerMiddle","lower_lip_end.R"],
 
 ["lNasolabialMiddle","upper_lip_joint01.L"],
 ["rNasolabialMiddle","upper_lip_joint01.R"],
@@ -56,8 +56,8 @@ head_weights_matching = [
 ["lLipBelowNose","lLipUpperInner","upper_lip_joint03.L"],
 ["rLipBelowNose","rLipUpperInner","upper_lip_joint03.R"],
 
-["LipUpperMiddle","upper_lip_jointEnd.L"],
-["LipUpperMiddle","upper_lip_jointEnd.R"],
+["LipUpperMiddle","upper_lip_end.L"],
+["LipUpperMiddle","upper_lip_end.R"],
 
 ["lBrowInner","eye_brow_joint01.L"],
 ["rBrowInner","eye_brow_joint01.R"],
@@ -65,10 +65,10 @@ head_weights_matching = [
 ["lBrowMid","eye_brow_joint02.L"],
 ["rBrowMid","eye_brow_joint02.R"],
 
-["lBrowOuter","eye_brow_jointEnd.L"],
-["rBrowOuter","eye_brow_jointEnd.R"],
+["lBrowOuter","eye_brow_end.L"],
+["rBrowOuter","eye_brow_end.R"],
 
-["CenterBrow","forehead_jointEnd"],
+["CenterBrow","forehead_end"],
 
 ["lEar","ear_joint01.L"],
 ["rEar","ear_joint01.R"]
@@ -78,20 +78,22 @@ head_weights_matching = [
 
 leg_weights_matching = [
 # source weights, target weights bone
-["lThighBend", "lThighBend", "hip_joint.L"], 
-["rThighBend", "rThighBend", "hip_joint.R"], 
+["lThighBend", "lThighBend", "thigh.L"],
+["rThighBend", "rThighBend", "thigh.R"],
 
-["lThighTwist", "lThighTwist", "thigh_twist_joint.L"], 
-["rThighTwist", "rThighTwist", "thigh_twist_joint.R"], 
+["lThighTwist", "lThighTwist", "thigh_twist_01.L"],
+["lThighTwist", "lThighTwist", "thigh_twist_02.L"],
+["rThighTwist", "rThighTwist", "thigh_twist_01.R"],
+["rThighTwist", "rThighTwist", "thigh_twist_02.R"],
 
-["lShin", "lShin", "knee_joint.L"],
-["rShin", "rShin", "knee_joint.R"],
+["lShin", "lShin", "calf.L"],
+["rShin", "rShin", "calf.R"],
 
-#["lFoot", "lFoot", "ankle_joint.L"],
-#["rFoot", "rFoot", "ankle_joint.R"],
+#["lFoot", "lFoot", "foot.L"],
+#["rFoot", "rFoot", "foot.R"],
 
-["lToe", "lToe", "ball_joint.L"],
-["rToe", "rToe", "ball_joint.R"],
+["lToe", "lToe", "ball.L"],
+["rToe", "rToe", "ball.R"],
 
 #["lBigToe_2","lBigToe_2","toe_deform01_joint01.L"],
 #["rBigToe_2","rBigToe_2","toe_deform01_joint01.R"],
@@ -139,86 +141,90 @@ toes_weights_matching = [
 
 # source bone used for head, source bone used for tail, target bone
 spine_weights_matching = [
-["pelvis", "pelvis", "pelvis_joint"],         #!!!!!!!!!!!!!!!! not going to set the root yet, as it could be hardcoded in many other places
-["abdomenLower", "abdomenLower", "spine_joint01"],
+["pelvis", "pelvis", "pelvis"],
+["abdomenLower", "abdomenLower", "spine_01"],
 
-["abdomenUpper", "abdomenUpper", "spine_joint02"],
-["chestLower", "chestLower", "spine_joint03"], ####so and so , maybe I need a mix with joint_03
-["chestUpper", "chestUpper", "spine_joint04"],
-#["chestUpper", "chestUpper", "spine_jointEnd"],
+["abdomenUpper", "abdomenUpper", "spine_02"],
+["chestLower", "chestLower", "spine_03"], ####so and so , maybe I need a mix with joint_03
+["chestUpper", "chestUpper", "spine_04"],
+#["chestUpper", "chestUpper", "spine_05"],
 
-["neckLower", "neckLower", "neck_joint01"],
-["neckUpper", "neckUpper", "neck_jointEnd"],
-#["head", "head", "head_joint02"]
+["neckLower", "neckLower", "neck_01"],
+["neckUpper", "neckUpper", "neck_02"],
+#["head", "head", "head"]
 ]
 
 
 hand_weights_matching = [
-["lCollar", "lCollar", "clavicle_joint.L"],
-["rCollar", "rCollar", "clavicle_joint.R"],
+["lCollar", "lCollar", "clavicle.L"],
+["rCollar", "rCollar", "clavicle.R"],
 
-["lShldrBend", "lShldrBend", "shoulder_joint.L"],  
-["rShldrBend", "rShldrBend", "shoulder_joint.R"],  
-["lShldrTwist", "lShldrTwist", "shoulder_twist_joint.L"],  
-["rShldrTwist", "rShldrTwist", "shoulder_twist_joint.R"], 
+["lShldrBend", "lShldrBend", "upperarm.L"],
+["rShldrBend", "rShldrBend", "upperarm.R"],
+["lShldrTwist", "lShldrTwist", "upperarm_twist_01.L"],
+["lShldrTwist", "lShldrTwist", "upperarm_twist_02.L"],
+["rShldrTwist", "rShldrTwist", "upperarm_twist_01.R"],
+["rShldrTwist", "rShldrTwist", "upperarm_twist_02.R"],
 
-["lForearmBend", "lForearmBend", "elbow_joint.L"],
-["rForearmBend", "rForearmBend", "elbow_joint.R"],
-["lForearmTwist", "lForearmTwist", "forearm_twist_joint.L"],
-["rForearmTwist", "rForearmTwist", "forearm_twist_joint.R"],
+["lForearmBend", "lForearmBend", "lowerarm.L"],
+["rForearmBend", "rForearmBend", "lowerarm.R"],
+["lForearmTwist", "lForearmTwist", "lowerarm_twist_01.L"],
+["lForearmTwist", "lForearmTwist", "lowerarm_twist_02.L"],
+["rForearmTwist", "rForearmTwist", "lowerarm_twist_01.R"],
+["rForearmTwist", "rForearmTwist", "lowerarm_twist_02.R"],
 
-["lHand", "lHand", "wrist_joint.L"],
-["rHand", "rHand", "wrist_joint.R"],
+["lHand", "lHand", "hand.L"],
+["rHand", "rHand", "hand.R"],
 
-["lThumb1", "lThumb1", "finger01_joint01.L"],
-["lCarpal1", "lCarpal1", "finger02_joint01.L"],
-["lCarpal2", "lCarpal2", "finger03_joint01.L"],
-["lCarpal3", "lCarpal3", "finger04_joint01.L"],
-["lCarpal4", "lCarpal4", "finger05_joint01.L"],
+["lThumb1", "lThumb1", "thumb_01.L"],
+["lCarpal1", "lCarpal1", "index_metacarpal.L"],
+["lCarpal2", "lCarpal2", "middle_metacarpal.L"],
+["lCarpal3", "lCarpal3", "ring_metacarpal.L"],
+["lCarpal4", "lCarpal4", "pinky_metacarpal.L"],
 
-["lThumb2", "lThumb2", "finger01_joint02.L"],
-["lThumb3", "lThumb3", "finger01_joint03.L"],
+["lThumb2", "lThumb2", "thumb_02.L"],
+["lThumb3", "lThumb3", "thumb_03.L"],
 
-["lIndex1", "lIndex1", "finger02_joint02.L"],
-["lIndex2", "lIndex2", "finger02_joint03.L"],
-["lIndex3", "lIndex3", "finger02_joint04.L"],
+["lIndex1", "lIndex1", "index_01.L"],
+["lIndex2", "lIndex2", "index_02.L"],
+["lIndex3", "lIndex3", "index_03.L"],
 
-["lMid1", "lMid1", "finger03_joint02.L"],
-["lMid2", "lMid2", "finger03_joint03.L"],
-["lMid3", "lMid3", "finger03_joint04.L"],
+["lMid1", "lMid1", "middle_01.L"],
+["lMid2", "lMid2", "middle_02.L"],
+["lMid3", "lMid3", "middle_03.L"],
 
-["lRing1", "lRing1", "finger04_joint02.L"],
-["lRing2", "lRing2", "finger04_joint03.L"],
-["lRing3", "lRing3", "finger04_joint04.L"],
+["lRing1", "lRing1", "ring_01.L"],
+["lRing2", "lRing2", "ring_02.L"],
+["lRing3", "lRing3", "ring_03.L"],
 
-["lPinky1", "lPinky1", "finger05_joint02.L"],
-["lPinky2", "lPinky2", "finger05_joint03.L"],
-["lPinky3", "lPinky3", "finger05_joint04.L"],
+["lPinky1", "lPinky1", "pinky_01.L"],
+["lPinky2", "lPinky2", "pinky_02.L"],
+["lPinky3", "lPinky3", "pinky_03.L"],
 
-["rThumb1", "rThumb1", "finger01_joint01.R"],
-["rCarpal1", "rCarpal1", "finger02_joint01.R"],
-["rCarpal2", "rCarpal2", "finger03_joint01.R"],
-["rCarpal3", "rCarpal3", "finger04_joint01.R"],
-["rCarpal4", "rCarpal4", "finger05_joint01.R"],
+["rThumb1", "rThumb1", "thumb_01.R"],
+["rCarpal1", "rCarpal1", "index_metacarpal.R"],
+["rCarpal2", "rCarpal2", "middle_metacarpal.R"],
+["rCarpal3", "rCarpal3", "ring_metacarpal.R"],
+["rCarpal4", "rCarpal4", "pinky_metacarpal.R"],
 
-["rThumb2", "rThumb2", "finger01_joint02.R"],
-["rThumb3", "rThumb3", "finger01_joint03.R"],
-           
-["rIndex1", "rIndex1", "finger02_joint02.R"],
-["rIndex2", "rIndex2", "finger02_joint03.R"],
-["rIndex3", "rIndex3", "finger02_joint04.R"],
+["rThumb2", "rThumb2", "thumb_02.R"],
+["rThumb3", "rThumb3", "thumb_03.R"],
 
-["rMid1", "rMid1", "finger03_joint02.R"],
-["rMid2", "rMid2", "finger03_joint03.R"],
-["rMid3", "rMid3", "finger03_joint04.R"],
+["rIndex1", "rIndex1", "index_01.R"],
+["rIndex2", "rIndex2", "index_02.R"],
+["rIndex3", "rIndex3", "index_03.R"],
 
-["rRing1", "rRing1", "finger04_joint02.R"],
-["rRing2", "rRing2", "finger04_joint03.R"],
-["rRing3", "rRing3", "finger04_joint04.R"],
+["rMid1", "rMid1", "middle_01.R"],
+["rMid2", "rMid2", "middle_02.R"],
+["rMid3", "rMid3", "middle_03.R"],
 
-["rPinky1", "rPinky1", "finger05_joint02.R"],
-["rPinky2", "rPinky2", "finger05_joint03.R"],
-["rPinky3", "rPinky3", "finger05_joint04.R"]
+["rRing1", "rRing1", "ring_01.R"],
+["rRing2", "rRing2", "ring_02.R"],
+["rRing3", "rRing3", "ring_03.R"],
+
+["rPinky1", "rPinky1", "pinky_01.R"],
+["rPinky2", "rPinky2", "pinky_02.R"],
+["rPinky3", "rPinky3", "pinky_03.R"]
 ]
 
 

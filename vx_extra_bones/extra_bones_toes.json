@@ -1,0 +1,272 @@
+[
+    {
+        "name": "big_toe_joint01.L",
+        "head": [ "0.061642", "-0.088013", "0.021902" ],
+        "tail": [ "0.063505", "-0.112469", "0.013705" ],
+        "roll": "-114.932659",
+        "parent": "ball.L",
+        "connected": false,
+        "deform": true
+    },
+    {
+        "name": "big_toe_joint02.L",
+        "head": [ "0.063557", "-0.112721", "0.014490" ],
+        "tail": [ "0.065420", "-0.137173", "0.006295" ],
+        "roll": "-114.932741",
+        "parent": "big_toe_joint01.L",
+        "connected": false,
+        "deform": true
+    },
+    {
+        "name": "big_toe_end.L",
+        "head": [ "0.065420", "-0.137173", "0.006295" ],
+        "tail": [ "0.075420", "-0.137173", "0.006295" ],
+        "roll": "-144.494687",
+        "parent": "big_toe_joint02.L",
+        "connected": true,
+        "deform": true
+    },
+    {
+        "name": "small_toe1_joint01.L",
+        "head": [ "0.084714", "-0.093681", "0.023356" ],
+        "tail": [ "0.086186", "-0.114811", "0.014288" ],
+        "roll": "-107.682795",
+        "parent": "ball.L",
+        "connected": false,
+        "deform": true
+    },
+    {
+        "name": "small_toe1_joint02.L",
+        "head": [ "0.086085", "-0.115013", "0.017003" ],
+        "tail": [ "0.087616", "-0.136990", "0.007571" ],
+        "roll": "-107.682775",
+        "parent": "small_toe1_joint01.L",
+        "connected": false,
+        "deform": true
+    },
+    {
+        "name": "small_toe1_end.L",
+        "head": [ "0.087616", "-0.136990", "0.007571" ],
+        "tail": [ "0.097616", "-0.136990", "0.007571" ],
+        "roll": "-130.228225",
+        "parent": "small_toe1_joint02.L",
+        "connected": true,
+        "deform": true
+    },
+    {
+        "name": "small_toe2_joint01.L",
+        "head": [ "0.100830", "-0.094165", "0.022689" ],
+        "tail": [ "0.101246", "-0.112179", "0.013314" ],
+        "roll": "-94.797200",
+        "parent": "ball.L",
+        "connected": false,
+        "deform": true
+    },
+    {
+        "name": "small_toe2_joint02.L",
+        "head": [ "0.101148", "-0.112418", "0.015845" ],
+        "tail": [ "0.101584", "-0.131287", "0.006024" ],
+        "roll": "-94.797234",
+        "parent": "small_toe2_joint01.L",
+        "connected": false,
+        "deform": true
+    },
+    {
+        "name": "small_toe2_end.L",
+        "head": [ "0.101584", "-0.131287", "0.006024" ],
+        "tail": [ "0.111584", "-0.131287", "0.006024" ],
+        "roll": "166.082730",
+        "parent": "small_toe2_joint02.L",
+        "connected": true,
+        "deform": true
+    },
+    {
+        "name": "small_toe3_joint01.L",
+        "head": [ "0.112636", "-0.089795", "0.019226" ],
+        "tail": [ "0.112841", "-0.103613", "0.011342" ],
+        "roll": "-92.781577",
+        "parent": "ball.L",
+        "connected": false,
+        "deform": true
+    },
+    {
+        "name": "small_toe3_joint02.L",
+        "head": [ "0.113111", "-0.103651", "0.013432" ],
+        "tail": [ "0.113330", "-0.118393", "0.005020" ],
+        "roll": "-92.781536",
+        "parent": "small_toe3_joint01.L",
+        "connected": false,
+        "deform": true
+    },
+    {
+        "name": "small_toe3_end.L",
+        "head": [ "0.113330", "-0.118393", "0.005020" ],
+        "tail": [ "0.123330", "-0.118393", "0.005020" ],
+        "roll": "171.290120",
+        "parent": "small_toe3_joint02.L",
+        "connected": true,
+        "deform": true
+    },
+    {
+        "name": "small_toe4_joint01.L",
+        "head": [ "0.129116", "-0.085230", "0.016039" ],
+        "tail": [ "0.128343", "-0.095683", "0.009624" ],
+        "roll": "-77.272170",
+        "parent": "ball.L",
+        "connected": false,
+        "deform": true
+    },
+    {
+        "name": "small_toe4_joint02.L",
+        "head": [ "0.128306", "-0.095705", "0.011611" ],
+        "tail": [ "0.127463", "-0.107094", "0.004622" ],
+        "roll": "-77.272006",
+        "parent": "small_toe4_joint01.L",
+        "connected": false,
+        "deform": true
+    },
+    {
+        "name": "small_toe4_end.L",
+        "head": [ "0.127463", "-0.107094", "0.004622" ],
+        "tail": [ "0.137463", "-0.107094", "0.004622" ],
+        "roll": "128.185343",
+        "parent": "small_toe4_joint02.L",
+        "connected": true,
+        "deform": true
+    },
+    {
+        "name": "big_toe_joint01.R",
+        "head": [ "-0.061642", "-0.088013", "0.021902" ],
+        "tail": [ "-0.063505", "-0.112469", "0.013705" ],
+        "roll": "114.933902",
+        "parent": "ball.R",
+        "connected": false,
+        "deform": true
+    },
+    {
+        "name": "big_toe_joint02.R",
+        "head": [ "-0.063557", "-0.112721", "0.014491" ],
+        "tail": [ "-0.065420", "-0.137173", "0.006295" ],
+        "roll": "114.933779",
+        "parent": "big_toe_joint01.R",
+        "connected": false,
+        "deform": true
+    },
+    {
+        "name": "big_toe_end.R",
+        "head": [ "-0.065420", "-0.137173", "0.006295" ],
+        "tail": [ "-0.055419", "-0.137167", "0.006298" ],
+        "roll": "144.490972",
+        "parent": "big_toe_joint02.R",
+        "connected": true,
+        "deform": true
+    },
+    {
+        "name": "small_toe1_joint01.R",
+        "head": [ "-0.084714", "-0.093681", "0.023357" ],
+        "tail": [ "-0.086186", "-0.114811", "0.014289" ],
+        "roll": "107.684114",
+        "parent": "ball.R",
+        "connected": false,
+        "deform": true
+    },
+    {
+        "name": "small_toe1_joint02.R",
+        "head": [ "-0.086085", "-0.115013", "0.017003" ],
+        "tail": [ "-0.087616", "-0.136990", "0.007572" ],
+        "roll": "107.684079",
+        "parent": "small_toe1_joint01.R",
+        "connected": false,
+        "deform": true
+    },
+    {
+        "name": "small_toe1_end.R",
+        "head": [ "-0.087616", "-0.136990", "0.007572" ],
+        "tail": [ "-0.077616", "-0.136983", "0.007574" ],
+        "roll": "130.225602",
+        "parent": "small_toe1_joint02.R",
+        "connected": true,
+        "deform": true
+    },
+    {
+        "name": "small_toe2_joint01.R",
+        "head": [ "-0.100830", "-0.094165", "0.022690" ],
+        "tail": [ "-0.101246", "-0.112179", "0.013314" ],
+        "roll": "94.797691",
+        "parent": "ball.R",
+        "connected": false,
+        "deform": true
+    },
+    {
+        "name": "small_toe2_joint02.R",
+        "head": [ "-0.101148", "-0.112418", "0.015846" ],
+        "tail": [ "-0.101584", "-0.131287", "0.006025" ],
+        "roll": "94.797705",
+        "parent": "small_toe2_joint01.R",
+        "connected": false,
+        "deform": true
+    },
+    {
+        "name": "small_toe2_end.R",
+        "head": [ "-0.101584", "-0.131287", "0.006025" ],
+        "tail": [ "-0.091584", "-0.131281", "0.006024" ],
+        "roll": "-166.059534",
+        "parent": "small_toe2_joint02.R",
+        "connected": true,
+        "deform": true
+    },
+    {
+        "name": "small_toe3_joint01.R",
+        "head": [ "-0.112636", "-0.089796", "0.019226" ],
+        "tail": [ "-0.112841", "-0.103613", "0.011342" ],
+        "roll": "92.781877",
+        "parent": "ball.R",
+        "connected": false,
+        "deform": true
+    },
+    {
+        "name": "small_toe3_joint02.R",
+        "head": [ "-0.113111", "-0.103651", "0.013433" ],
+        "tail": [ "-0.113330", "-0.118393", "0.005020" ],
+        "roll": "92.781829",
+        "parent": "small_toe3_joint01.R",
+        "connected": false,
+        "deform": true
+    },
+    {
+        "name": "small_toe3_end.R",
+        "head": [ "-0.113330", "-0.118393", "0.005020" ],
+        "tail": [ "-0.103330", "-0.118386", "0.005017" ],
+        "roll": "-171.268455",
+        "parent": "small_toe3_joint02.R",
+        "connected": true,
+        "deform": true
+    },
+    {
+        "name": "small_toe4_joint01.R",
+        "head": [ "-0.129116", "-0.085230", "0.016039" ],
+        "tail": [ "-0.128343", "-0.095683", "0.009624" ],
+        "roll": "77.270504",
+        "parent": "ball.R",
+        "connected": false,
+        "deform": true
+    },
+    {
+        "name": "small_toe4_joint02.R",
+        "head": [ "-0.128306", "-0.095706", "0.011612" ],
+        "tail": [ "-0.127463", "-0.107094", "0.004622" ],
+        "roll": "77.270415",
+        "parent": "small_toe4_joint01.R",
+        "connected": false,
+        "deform": true
+    },
+    {
+        "name": "small_toe4_end.R",
+        "head": [ "-0.127463", "-0.107094", "0.004622" ],
+        "tail": [ "-0.117462", "-0.107090", "0.004621" ],
+        "roll": "-128.154716",
+        "parent": "small_toe4_joint02.R",
+        "connected": true,
+        "deform": true
+    }
+]

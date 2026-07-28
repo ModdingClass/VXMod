@@ -1,0 +1,218 @@
+[
+    {
+        "name": "BreastSimTop_joint",
+        "head": [ "-0.000000", "-0.047156", "1.400209" ],
+        "tail": [ "0.000000", "-0.113636", "1.400209" ],
+        "roll": "0.000001",
+        "parent": "spine_05",
+        "connected": false,
+        "deform": true
+    },
+    {
+        "name": "BreastSimTop_end",
+        "head": [ "0.000000", "-0.113636", "1.400209" ],
+        "tail": [ "0.000000", "-0.134517", "1.400209" ],
+        "roll": "-0.000011",
+        "parent": "BreastSimTop_joint",
+        "connected": false,
+        "deform": true
+    },
+    {
+        "name": "BreastSimBottom_joint",
+        "head": [ "-0.000000", "-0.047156", "1.334467" ],
+        "tail": [ "0.000000", "-0.113636", "1.334467" ],
+        "roll": "0.000001",
+        "parent": "spine_05",
+        "connected": false,
+        "deform": true
+    },
+    {
+        "name": "BreastSimBottom_end",
+        "head": [ "0.000000", "-0.113636", "1.334467" ],
+        "tail": [ "0.000000", "-0.134517", "1.334467" ],
+        "roll": "-0.000011",
+        "parent": "BreastSimBottom_joint",
+        "connected": false,
+        "deform": true
+    },
+    {
+        "name": "breast_scale_joint.L",
+        "head": [ "0.030604", "0.072443", "1.346976" ],
+        "tail": [ "0.054275", "0.012644", "1.346976" ],
+        "roll": "87.395453",
+        "parent": "spine_05",
+        "connected": false,
+        "deform": true
+    },
+    {
+        "name": "breast_fixed_joint.L",
+        "head": [ "0.063221", "0.012644", "1.346976" ],
+        "tail": [ "0.063221", "-0.009954", "1.346976" ],
+        "roll": "-0.000000",
+        "parent": "breast_scale_joint.L",
+        "connected": false,
+        "deform": true
+    },
+    {
+        "name": "breast_joint01.L",
+        "head": [ "0.063221", "-0.009954", "1.346976" ],
+        "tail": [ "0.088991", "-0.075057", "1.346976" ],
+        "roll": "87.395460",
+        "parent": "breast_fixed_joint.L",
+        "connected": false,
+        "deform": true
+    },
+    {
+        "name": "breast_joint02.L",
+        "head": [ "0.088991", "-0.075057", "1.346976" ],
+        "tail": [ "0.114763", "-0.140161", "1.346976" ],
+        "roll": "87.395453",
+        "parent": "breast_joint01.L",
+        "connected": false,
+        "deform": true
+    },
+    {
+        "name": "breast_nipple_joint.L",
+        "head": [ "0.114763", "-0.140161", "1.346976" ],
+        "tail": [ "0.121065", "-0.156082", "1.346976" ],
+        "roll": "87.396129",
+        "parent": "breast_joint02.L",
+        "connected": false,
+        "deform": true
+    },
+    {
+        "name": "breast_nipple_end.L",
+        "head": [ "0.115364", "-0.141679", "1.346976" ],
+        "tail": [ "0.116410", "-0.144321", "1.346976" ],
+        "roll": "87.395303",
+        "parent": "breast_nipple_joint.L",
+        "connected": false,
+        "deform": false
+    },
+    {
+        "name": "breast_swing_joint.L",
+        "head": [ "0.063221", "0.012644", "1.346980" ],
+        "tail": [ "0.063221", "-0.009954", "1.346980" ],
+        "roll": "-0.000000",
+        "parent": "breast_scale_joint.L",
+        "connected": false,
+        "deform": true
+    },
+    {
+        "name": "breast_rod.L",
+        "head": [ "0.063221", "-0.009954", "1.346976" ],
+        "tail": [ "0.114763", "-0.140161", "1.388160" ],
+        "roll": "-74.106419",
+        "parent": "breast_swing_joint.L",
+        "connected": false,
+        "deform": true
+    },
+    {
+        "name": "breast_line.L",
+        "head": [ "0.114763", "-0.140161", "1.388160" ],
+        "tail": [ "0.114763", "-0.140161", "1.346976" ],
+        "roll": "0.000000",
+        "parent": "breast_rod.L",
+        "connected": true,
+        "deform": true
+    },
+    {
+        "name": "breast_hook.L",
+        "head": [ "0.114763", "-0.140161", "1.346976" ],
+        "tail": [ "0.114763", "-0.140161", "1.336976" ],
+        "roll": "-0.000000",
+        "parent": "breast_line.L",
+        "connected": true,
+        "deform": true
+    },
+    {
+        "name": "breast_scale_joint.R",
+        "head": [ "-0.030604", "0.072443", "1.346976" ],
+        "tail": [ "-0.054275", "0.012644", "1.346976" ],
+        "roll": "-87.395453",
+        "parent": "spine_05",
+        "connected": false,
+        "deform": true
+    },
+    {
+        "name": "breast_fixed_joint.R",
+        "head": [ "-0.063221", "0.012644", "1.346976" ],
+        "tail": [ "-0.063221", "-0.009954", "1.346976" ],
+        "roll": "0.000000",
+        "parent": "breast_scale_joint.R",
+        "connected": false,
+        "deform": true
+    },
+    {
+        "name": "breast_joint01.R",
+        "head": [ "-0.063221", "-0.009954", "1.346976" ],
+        "tail": [ "-0.088991", "-0.075057", "1.346976" ],
+        "roll": "-87.395460",
+        "parent": "breast_fixed_joint.R",
+        "connected": false,
+        "deform": true
+    },
+    {
+        "name": "breast_joint02.R",
+        "head": [ "-0.088991", "-0.075057", "1.346976" ],
+        "tail": [ "-0.114763", "-0.140161", "1.346976" ],
+        "roll": "-87.395453",
+        "parent": "breast_joint01.R",
+        "connected": false,
+        "deform": true
+    },
+    {
+        "name": "breast_nipple_joint.R",
+        "head": [ "-0.114763", "-0.140161", "1.346976" ],
+        "tail": [ "-0.121065", "-0.156082", "1.346976" ],
+        "roll": "-87.396129",
+        "parent": "breast_joint02.R",
+        "connected": false,
+        "deform": true
+    },
+    {
+        "name": "breast_nipple_end.R",
+        "head": [ "-0.115364", "-0.141679", "1.346976" ],
+        "tail": [ "-0.116410", "-0.144321", "1.346976" ],
+        "roll": "-87.395303",
+        "parent": "breast_nipple_joint.R",
+        "connected": false,
+        "deform": false
+    },
+    {
+        "name": "breast_swing_joint.R",
+        "head": [ "-0.063221", "0.012644", "1.346980" ],
+        "tail": [ "-0.063221", "-0.009954", "1.346980" ],
+        "roll": "0.000000",
+        "parent": "breast_scale_joint.R",
+        "connected": false,
+        "deform": true
+    },
+    {
+        "name": "breast_rod.R",
+        "head": [ "-0.063221", "-0.009954", "1.346976" ],
+        "tail": [ "-0.114763", "-0.140161", "1.388160" ],
+        "roll": "74.106419",
+        "parent": "breast_swing_joint.R",
+        "connected": false,
+        "deform": true
+    },
+    {
+        "name": "breast_line.R",
+        "head": [ "-0.114763", "-0.140161", "1.388160" ],
+        "tail": [ "-0.114763", "-0.140161", "1.346976" ],
+        "roll": "0.000000",
+        "parent": "breast_rod.R",
+        "connected": true,
+        "deform": true
+    },
+    {
+        "name": "breast_hook.R",
+        "head": [ "-0.114763", "-0.140161", "1.346976" ],
+        "tail": [ "-0.114763", "-0.140161", "1.336976" ],
+        "roll": "0.000000",
+        "parent": "breast_line.R",
+        "connected": true,
+        "deform": true
+    }
+]

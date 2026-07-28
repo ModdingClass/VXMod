@@ -15,10 +15,10 @@ bones_matching = {
 
 "abdomenUpper" : "spine_joint03",
 "chestLower" : "spine_joint04", ####so and so , maybe I need a mix with joint_03
-"chestUpper" : "spine_jointEnd",
+"chestUpper" : "spine_end",
 
 "neckLower" : "neck_joint01",
-"neckUpper" : "neck_jointEnd",
+"neckUpper" : "neck_end",
 "head" : "head_joint02",
 
 "lCollar" : "clavicle_joint.L",

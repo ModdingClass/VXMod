@@ -1,0 +1,56 @@
+[
+    {
+        "name": "rib_joint01.L",
+        "head": [ "0.092859", "-0.014264", "1.218586" ],
+        "tail": [ "0.096418", "-0.094287", "1.220037" ],
+        "roll": "-0.003516",
+        "parent": "spine_04",
+        "connected": false,
+        "deform": true
+    },
+    {
+        "name": "rib_end.L",
+        "head": [ "0.096418", "-0.094287", "1.220037" ],
+        "tail": [ "0.116418", "-0.094287", "1.220037" ],
+        "roll": "-0.000000",
+        "parent": "rib_joint01.L",
+        "connected": false,
+        "deform": false
+    },
+    {
+        "name": "rib_joint01.R",
+        "head": [ "-0.092859", "-0.014264", "1.218586" ],
+        "tail": [ "-0.096418", "-0.094287", "1.220037" ],
+        "roll": "0.003516",
+        "parent": "spine_04",
+        "connected": false,
+        "deform": true
+    },
+    {
+        "name": "rib_end.R",
+        "head": [ "-0.096418", "-0.094287", "1.220037" ],
+        "tail": [ "-0.116418", "-0.094287", "1.220037" ],
+        "roll": "0.000000",
+        "parent": "rib_joint01.R",
+        "connected": false,
+        "deform": false
+    },
+    {
+        "name": "stomach_joint01",
+        "head": [ "-0.000004", "-0.032614", "1.106288" ],
+        "tail": [ "-0.000073", "-0.102698", "1.106288" ],
+        "roll": "0.000001",
+        "parent": "pelvis",
+        "connected": false,
+        "deform": true
+    },
+    {
+        "name": "stomach_end",
+        "head": [ "-0.000073", "-0.102698", "1.106288" ],
+        "tail": [ "0.019927", "-0.102698", "1.106288" ],
+        "roll": "-0.000000",
+        "parent": "stomach_joint01",
+        "connected": false,
+        "deform": true
+    }
+]

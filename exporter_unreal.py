@@ -13,6 +13,7 @@ import sys
 import time
 from .utils import *
 from .tools_message_box import *
+from .diffeomorphic_merge_geografts import geograft_data_available, merge_geografts_into_active
 
 from . import fbody_stats
 #from . import strip_and_clean_op
@@ -441,10 +442,8 @@ def build_subdivision_vertex_matching_table(params):
         mergedMeshesName = obj.name
         pass
     else:
-        if ( operator_exists("daz.merge_geografts_nondestructive_bmesh") or operator_exists("daz.merge_geografts_fast") or operator_exists("daz.merge_geografts") or operator_exists("daz.merge_geografts_nondestructive")):
-            pass
-        else:
-            ShowMessageBox("'Include Geografts' is checked, but can't find `modded` Difeomorphic addon for Blender", "Error", 'ERROR')
+        if not geograft_data_available():
+            ShowMessageBox("'Include Geografts' is checked, but the Difeomorphic addon (import_daz) is not enabled, so there is no geograft data", "Error", 'ERROR')
             return None
         #
         geograft_children = get_geograft_children(obj)
@@ -488,18 +487,8 @@ def build_subdivision_vertex_matching_table(params):
         vxasset.select=True
         bpy.context.scene.objects.active = vxasset
         vxasset.select=True
-        if ( operator_exists("daz.merge_geografts_nondestructive_bmesh") ):
-            print("daz.merge_geografts_nondestructive_bmesh is available :) (fast bmesh version)")
-            bpy.ops.daz.merge_geografts_nondestructive_bmesh()
-        elif ( operator_exists("daz.merge_geografts_nondestructive") ):
-            print("daz.merge_geografts_nondestructive is available :)")
-            bpy.ops.daz.merge_geografts_nondestructive()
-        elif ( operator_exists("daz.merge_geografts_fast") ):
-            print("daz.merge_geografts_fast is available")
-            bpy.ops.daz.merge_geografts_fast()
-        else:
-            print("daz.merge_geografts fallback :(")
-            bpy.ops.daz.merge_geografts()
+        # merge operators live in diffeomorphic_merge_geografts.py (vxmod.merge_geografts*)
+        merge_geografts_into_active()
     
     
     deselect_all_objects()
@@ -807,7 +796,7 @@ def reorient_bones_for_unreal2(armature_clone, armature_object):
     ebones = armature_clone.data.edit_bones
     #
     legLeftBones = ['thigh.L', 'calf.L', 'thigh_twist_01.L','thigh_twist_02.L']
-    legRightBones = ['thigh.R', 'calf.R', 'thigh_twist_01.R','thigh_twist_02.R']#, 'hip_twist_jointEnd.R']
+    legRightBones = ['thigh.R', 'calf.R', 'thigh_twist_01.R','thigh_twist_02.R']#, 'hip_twist_end.R']
     ankleLeftBones=['foot.L']
     ankleRightBones=['foot.R']
     ballLeftBones=['ball.L']
@@ -825,10 +814,10 @@ def reorient_bones_for_unreal2(armature_clone, armature_object):
                         'pinky_metacarpal.L','pinky_01.L','pinky_02.L','pinky_03.L',
                         'thumb_01.L','thumb_02.L','thumb_03.L'
     ]
-    breastLeftBones = ['breast_scale_joint.L','breast_joint01.L','breast_joint02.L','breast_nipple_joint.L','breast_nipple_jointEnd.L']
-    breastRightBones = ['breast_scale_joint.R','breast_joint01.R','breast_joint02.R','breast_nipple_joint.R','breast_nipple_jointEnd.R']
+    breastLeftBones = ['breast_scale_joint.L','breast_joint01.L','breast_joint02.L','breast_nipple_joint.L','breast_nipple_end.L']
+    breastRightBones = ['breast_scale_joint.R','breast_joint01.R','breast_joint02.R','breast_nipple_joint.R','breast_nipple_end.R']
     #
-    spineBones = ['spine_01', 'spine_02', 'spine_03', 'spine_04', 'spine_05', 'neck_01', 'neck_02', 'head'] #, 'head_jointEnd']
+    spineBones = ['spine_01', 'spine_02', 'spine_03', 'spine_04', 'spine_05', 'neck_01', 'neck_02', 'head'] #, 'head_end']
     #
     rootBones = ['base']
     rootBones = []
@@ -1160,10 +1149,8 @@ def export_to_unreal_v2(params) : #exportfolderpath,
         mergedMeshesName = obj.name
         pass
     else:
-        if ( operator_exists("daz.merge_geografts_nondestructive_bmesh") or operator_exists("daz.merge_geografts_fast") or operator_exists("daz.merge_geografts") or operator_exists("daz.merge_geografts_nondestructive")):
-            pass
-        else:
-            ShowMessageBox("'Include Geografts' is checked, but can't find `modded` Difeomorphic addon for Blender", "Error", 'ERROR')
+        if not geograft_data_available():
+            ShowMessageBox("'Include Geografts' is checked, but the Difeomorphic addon (import_daz) is not enabled, so there is no geograft data", "Error", 'ERROR')
             return None
         #
         geograft_children = get_geograft_children(obj)
@@ -1213,18 +1200,8 @@ def export_to_unreal_v2(params) : #exportfolderpath,
         vxasset.select=True
         bpy.context.scene.objects.active = vxasset
         vxasset.select=True
-        if ( operator_exists("daz.merge_geografts_nondestructive_bmesh") ):
-            print("daz.merge_geografts_nondestructive_bmesh is available :) (fast bmesh version)")
-            bpy.ops.daz.merge_geografts_nondestructive_bmesh()
-        elif ( operator_exists("daz.merge_geografts_nondestructive") ):
-            print("daz.merge_geografts_nondestructive is available :)")
-            bpy.ops.daz.merge_geografts_nondestructive()
-        elif ( operator_exists("daz.merge_geografts_fast") ):
-            print("daz.merge_geografts_fast is available")
-            bpy.ops.daz.merge_geografts_fast()
-        else:
-            print("daz.merge_geografts fallback :(")
-            bpy.ops.daz.merge_geografts()
+        # merge operators live in diffeomorphic_merge_geografts.py (vxmod.merge_geografts*)
+        merge_geografts_into_active()
     ############################################################################################
     global loaded_int_key_dict
     loaded_int_key_dict = OrderedDict()

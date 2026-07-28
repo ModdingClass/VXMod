@@ -16,16 +16,16 @@ def adjust_editbones_length():
 	parent_direct_child_dict = {
 	"breast_scale_joint.R":"nipple_joint01.R",
 	"breast_scale_joint.L":"nipple_joint01.L",
-	"neck_joint01":"neck_jointEnd",
-	"head_joint02":"head_jointEnd",
+	"neck_joint01":"neck_end",
+	"head_joint02":"head_end",
 	"ball_joint.R":"toe_joint.R",
 	"ball_joint.L":"toe_joint.L",
 	"spine_joint02":"spine_joint03",
 	"spine_joint03":"spine_joint04",
-	"spine_joint04":"spine_jointEnd",
+	"spine_joint04":"spine_end",
 	"eye_socket_joint.L":"eye_joint.L",
 	"eye_socket_joint.R":"eye_joint.R",
-	"lower_jaw_joint01":"lower_jaw_jointEnd"
+	"lower_jaw_joint01":"lower_jaw_end"
 	}
 	#
 	#some bones should be left untouched

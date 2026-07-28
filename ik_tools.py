@@ -14,7 +14,7 @@ def create_foot_IKs(armature_object):
     armature = ob.data    
     #
     #
-    joints_list = [["ball_joint.L","ankle_joint.L","ball_target.L"], ["ball_joint.R","ankle_joint.R","ball_target.R"]]
+    joints_list = [["ball.L","foot.L","ball_target.L"], ["ball.R","foot.R","ball_target.R"]]
     for joints in joints_list:
 
         #Must make armature active and in edit mode to create a bone
@@ -49,7 +49,7 @@ def create_arms_IKs(armature_object):
     armature = ob.data    
     #
     #
-    joints_list = [["wrist_joint.L","elbow_joint.L", "shoulder_joint.L","arm_target.L", "arm_pole.L"], ["wrist_joint.R","elbow_joint.R","shoulder_joint.R","arm_target.R", "arm_pole.R"]]
+    joints_list = [["hand.L","lowerarm.L", "upperarm.L","arm_target.L", "arm_pole.L"], ["hand.R","lowerarm.R","upperarm.R","arm_target.R", "arm_pole.R"]]
     for joints in joints_list:
         #Must make armature active and in edit mode to create a bone
         bpy.ops.object.mode_set(mode='EDIT', toggle=False)
@@ -125,7 +125,7 @@ def create_legs_IKs(armature_object):
         if bone is not None:
             armature.edit_bones.remove(bone)
     #
-    joints_list = [["ankle_joint.L","knee_joint.L", "hip_joint.L","leg_target.L", "leg_pole.L"], ["ankle_joint.R","knee_joint.R","hip_joint.R","leg_target.R", "leg_pole.R"]]
+    joints_list = [["foot.L","calf.L", "thigh.L","leg_target.L", "leg_pole.L"], ["foot.R","calf.R","thigh.R","leg_target.R", "leg_pole.R"]]
     for joints in joints_list:
         #Must make armature active and in edit mode to create a bone
         bpy.ops.object.mode_set(mode='EDIT', toggle=False)
@@ -197,7 +197,7 @@ def create_IKs(armature_object):
     create_foot_IKs(armature_object)
     if (True == True):
         return
-    center_list = ["spine_joint01","spine_joint02","spine_joint03","spine_joint04","spine_jointEnd","neck_joint01","neck_jointEnd","head_joint01","head_joint02","head_jointEnd"]
+    center_list = ["spine_01","spine_02","spine_03","spine_04","spine_05","neck_01","neck_02","head","head_end"]
     #
     #
     ob = armature_object
@@ -210,8 +210,8 @@ def create_IKs(armature_object):
     #
     armature_matrix_world = ob.matrix_world
     #
-    bone_ankle_joint_L = ob.data.edit_bones["ankle_joint.L"]
-    bone_knee_joint_L = ob.data.edit_bones["knee_joint.L"]
+    bone_ankle_joint_L = ob.data.edit_bones["foot.L"]
+    bone_knee_joint_L = ob.data.edit_bones["calf.L"]
     line_a = bone_knee_joint_L.head
     line_b = bone_knee_joint_L.tail
     plane_co = bone_ankle_joint_L.head
@@ -226,7 +226,7 @@ def create_IKs(armature_object):
     bpy.context.scene.objects.active = ob
     bpy.ops.object.mode_set(mode='POSE')
     #
-    bone = armature.bones["knee_joint.L"]
+    bone = armature.bones["calf.L"]
 
     ik_constraint = None
     ik_constraints = [ c for c in ob.pose.bones[bone.name].constraints if c.type=='IK']
@@ -247,7 +247,7 @@ def create_IKs(armature_object):
     if (True == True):
         return
     
-    pose_bone_knee_joint_L = ob.pose.bones["knee_joint.L"]
+    pose_bone_knee_joint_L = ob.pose.bones["calf.L"]
     #set it as active pose bone 
     bpy.context.object.data.bones.active = pose_bone_knee_joint_L.bone
     #bpy.ops.pose.constraint_add(type='IK')
@@ -303,8 +303,8 @@ def create_IKs(armature_object):
         bpy.context.scene.objects.link( ob )
     #
     #eb = bpy.data.armatures['Armature'].edit_bones
-    bone_ankle_joint_L = ob.data.edit_bones["ankle_joint.L"]
-    bone_knee_joint_L = ob.data.edit_bones["knee_joint.L"]
+    bone_ankle_joint_L = ob.data.edit_bones["foot.L"]
+    bone_knee_joint_L = ob.data.edit_bones["calf.L"]
     line_a = bone_knee_joint_L.head
     line_b = bone_knee_joint_L.tail
     plane_co = bone_ankle_joint_L.head
@@ -324,7 +324,7 @@ def create_IKs(armature_object):
     #plane_co (mathutils.Vector) – A point on the plane
     #plane_no (mathutils.Vector) – The direction the plane is facing
     # 
-    bone_knee_joint_R = ob.data.edit_bones["knee_joint.R"]
+    bone_knee_joint_R = ob.data.edit_bones["calf.R"]
     #
     ob = bpy.data.objects.new( "_mouth_L_fix_group", None )
     ob.rotation_mode = 'YZX'
@@ -365,17 +365,17 @@ def fixJointsUsedAsEffectors(target_armature):
     #
     #first we try to fix the knee bone to make it closer to the ankle
     # knee bones
-    startBone = "knee_joint.L"
-    endBone = "ankle_joint.L"
+    startBone = "calf.L"
+    endBone = "foot.L"
     localCo, worldCo, distance, translationAlongY = getClosestPointFromBoneProjection(target_armature,startBone, endBone)
     ebones[startBone].length = distance
     #also move the ankles head to the knee tail
     ebones[endBone].head = localCo
     #
-    startBone = "knee_joint.R"
-    endBone = "ankle_joint.R"
+    startBone = "calf.R"
+    endBone = "foot.R"
     localCo, worldCo, distance, translationAlongY = getClosestPointFromBoneProjection(target_armature,startBone, endBone)
-    ebones[startBone].length = distance    
+    ebones[startBone].length = distance
     #also move the ankles head to the knee tail
     ebones[endBone].head = localCo
     #
@@ -391,43 +391,47 @@ def fixJointsUsedAsEffectors(target_armature):
     #localCo, worldCo, distance, translationAlongY = getClosestPointFromBoneProjection(target_armature,startBone, endBone)
     #ebones[startBone].length = distance
     # ankle bones
-    startBone = "ankle_joint.L"
-    endBone = "ball_joint.L"
+    startBone = "foot.L"
+    endBone = "ball.L"
     localCo, worldCo, distance, translationAlongY = getClosestPointFromBoneProjection(target_armature,startBone, endBone)
     ebones[startBone].length = distance
-    startBone = "ankle_joint.R"
-    endBone = "ball_joint.R"
+    startBone = "foot.R"
+    endBone = "ball.R"
     localCo, worldCo, distance, translationAlongY = getClosestPointFromBoneProjection(target_armature,startBone, endBone)
     ebones[startBone].length = distance
     # ankles tail must match the ball head
-    ebones["ankle_joint.L"].tail = ebones["ball_joint.L"].head
-    ebones["ankle_joint.R"].tail = ebones["ball_joint.R"].head
+    ebones["foot.L"].tail = ebones["ball.L"].head
+    ebones["foot.R"].tail = ebones["ball.R"].head
     #elbows - forearms
-    startBone = "elbow_joint.L"
-    endBone = "wrist_joint.L"
+    startBone = "lowerarm.L"
+    endBone = "hand.L"
     localCo, worldCo, distance, translationAlongY = getClosestPointFromBoneProjection(target_armature,startBone, endBone)
-    ebones["forearm_twist_joint.L"].tail = localCo
-    startBone = "elbow_joint.L"
-    endBone = "forearm_twist_joint.L"
+    ebones["lowerarm_twist_01.L"].tail = localCo
+    ebones["lowerarm_twist_02.L"].tail = localCo
+    startBone = "lowerarm.L"
+    endBone = "lowerarm_twist_01.L"
     localCo, worldCo, distance, translationAlongY = getClosestPointFromBoneProjection(target_armature,startBone, endBone)
-    ebones["forearm_twist_joint.L"].head = localCo
+    ebones["lowerarm_twist_01.L"].head = localCo
+    ebones["lowerarm_twist_02.L"].head = localCo
     #also fix the wrists ?!?!? why not in the end...
-    ebones["wrist_joint.L"].head = ebones["forearm_twist_joint.L"].tail
+    ebones["hand.L"].head = ebones["lowerarm_twist_01.L"].tail
     #
-    startBone = "elbow_joint.R"
-    endBone = "wrist_joint.R"
+    startBone = "lowerarm.R"
+    endBone = "hand.R"
     localCo, worldCo, distance, translationAlongY = getClosestPointFromBoneProjection(target_armature,startBone, endBone)
-    ebones["forearm_twist_joint.R"].tail = localCo
-    startBone = "elbow_joint.R"
-    endBone = "forearm_twist_joint.R"
+    ebones["lowerarm_twist_01.R"].tail = localCo
+    ebones["lowerarm_twist_02.R"].tail = localCo
+    startBone = "lowerarm.R"
+    endBone = "lowerarm_twist_01.R"
     localCo, worldCo, distance, translationAlongY = getClosestPointFromBoneProjection(target_armature,startBone, endBone)
-    ebones["forearm_twist_joint.R"].head = localCo
+    ebones["lowerarm_twist_01.R"].head = localCo
+    ebones["lowerarm_twist_02.R"].head = localCo
     #
     #also fix the wrists ?!?!? why not in the end...
-    ebones["wrist_joint.R"].head = ebones["forearm_twist_joint.R"].tail
+    ebones["hand.R"].head = ebones["lowerarm_twist_01.R"].tail
     #make forearm elbow collinear
-    makeBonesCollinearFromBoneHeadToBoneTail(target_armature,["elbow_joint.L","forearm_twist_joint.L"])
-    makeBonesCollinearFromBoneHeadToBoneTail(target_armature,["elbow_joint.R","forearm_twist_joint.R"])
+    makeBonesCollinearFromBoneHeadToBoneTail(target_armature,["lowerarm.L","lowerarm_twist_01.L"])
+    makeBonesCollinearFromBoneHeadToBoneTail(target_armature,["lowerarm.R","lowerarm_twist_01.R"])
 
 
 
@@ -666,9 +670,9 @@ def create_HHPoseIk(armature):
 
 
     ik_for_bones = [
-        {"bone":"knee_joint.L","target":"leg_L_ikHandle_target","pole_target":"knee_L_group_pivot","pole_angle":-90,"chain_length":2},
-        {"bone":"ankle_joint.L","target":"tiptoe_L_ikHandle_target","pole_target":"tiptoe_L_ikHandle_pole","pole_angle":-90,"chain_length":1},
-        {"bone":"ball_joint.L","target":"tiptoe_L_rotation_ikHandle_target","pole_target":"tiptoe_L_rotation_ikHandle_pole","pole_angle":-90,"chain_length":1},
+        {"bone":"calf.L","target":"leg_L_ikHandle_target","pole_target":"knee_L_group_pivot","pole_angle":-90,"chain_length":2},
+        {"bone":"foot.L","target":"tiptoe_L_ikHandle_target","pole_target":"tiptoe_L_ikHandle_pole","pole_angle":-90,"chain_length":1},
+        {"bone":"ball.L","target":"tiptoe_L_rotation_ikHandle_target","pole_target":"tiptoe_L_rotation_ikHandle_pole","pole_angle":-90,"chain_length":1},
 
     ]
     ob = bpy.data.objects["Armature"]
@@ -861,9 +865,9 @@ def create_HHPoseIk(armature):
 
 
     ik_for_bones = [
-        {"bone":"knee_joint.R","target":"leg_R_ikHandle_target","pole_target":"knee_R_group_pivot","pole_angle":-90,"chain_length":2},
-        {"bone":"ankle_joint.R","target":"tiptoe_R_ikHandle_target","pole_target":"tiptoe_R_ikHandle_pole","pole_angle":-90,"chain_length":1},
-        {"bone":"ball_joint.R","target":"tiptoe_R_rotation_ikHandle_target","pole_target":"tiptoe_R_rotation_ikHandle_pole","pole_angle":-90,"chain_length":1},
+        {"bone":"calf.R","target":"leg_R_ikHandle_target","pole_target":"knee_R_group_pivot","pole_angle":-90,"chain_length":2},
+        {"bone":"foot.R","target":"tiptoe_R_ikHandle_target","pole_target":"tiptoe_R_ikHandle_pole","pole_angle":-90,"chain_length":1},
+        {"bone":"ball.R","target":"tiptoe_R_rotation_ikHandle_target","pole_target":"tiptoe_R_rotation_ikHandle_pole","pole_angle":-90,"chain_length":1},
 
     ]
     ob = bpy.data.objects["Armature"]

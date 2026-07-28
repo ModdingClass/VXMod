@@ -6,6 +6,12 @@ from ..g3f.difeomorphic_workflow_armature_utils import *
 def getArmatureBonesDictFromGensVertices(bones_dict):
     print("getArmatureBonesDictFromGensVertices()...")
     armature_data = bpy.data.objects['Armature']
+    gens_bone_names = [
+        "vagina_joint01.R", "vagina_end.R",
+        "vagina_joint01.L", "vagina_end.L",
+        "anus_joint",
+    ]
+    has_gens = any(b in armature_data.data.bones for b in gens_bone_names)
     amw = armature_data.matrix_world
     amwi = amw.inverted()
     amwi = Matrix.Identity(4)
@@ -26,17 +32,17 @@ def getArmatureBonesDictFromGensVertices(bones_dict):
     vagina_joint01_R_head = getCenter (vagina_center, obj )
     vagina_joint01_R_head.x = vagina_joint01_R_tail.x
     
-    vagina_jointEnd_R_head = vagina_joint01_R_tail.copy()
-    vagina_jointEnd_R_tail = vagina_joint01_R_tail.copy()
-    vagina_jointEnd_R_tail.x += 0.02
+    vagina_end_R_head = vagina_joint01_R_tail.copy()
+    vagina_end_R_tail = vagina_joint01_R_tail.copy()
+    vagina_end_R_tail.x += 0.02
     
     vagina_joint01_L_tail = getCenter (vagina_L, obj )
     vagina_joint01_L_head = getCenter (vagina_center, obj )
     vagina_joint01_L_head.x = vagina_joint01_L_tail.x
     
-    vagina_jointEnd_L_head = vagina_joint01_L_tail.copy()
-    vagina_jointEnd_L_tail = vagina_joint01_L_tail.copy()
-    vagina_jointEnd_L_tail.x -= 0.02
+    vagina_end_L_head = vagina_joint01_L_tail.copy()
+    vagina_end_L_tail = vagina_joint01_L_tail.copy()
+    vagina_end_L_tail.x -= 0.02
     
     
     
@@ -46,11 +52,11 @@ def getArmatureBonesDictFromGensVertices(bones_dict):
     
     
     
-    bones_dict["vagina_joint01.R"]= {"head" : amwi * vagina_joint01_R_head, "tail" : amwi * vagina_joint01_R_tail, "roll" : 90, "rollOverride" : 0, "connected" : False }
-    bones_dict["vagina_joint01.L"]= {"head" : amwi * vagina_joint01_L_head, "tail" : amwi * vagina_joint01_L_tail, "roll" : -90, "rollOverride" : 0, "connected" : False }
-    
-    bones_dict["vagina_jointEnd.R"]= {"head" : amwi * vagina_jointEnd_R_head, "tail" : amwi * vagina_jointEnd_R_tail, "roll" : 0, "rollOverride" : 0, "connected" : False }
-    bones_dict["vagina_jointEnd.L"]= {"head" : amwi * vagina_jointEnd_L_head, "tail" : amwi * vagina_jointEnd_L_tail, "roll" : 0, "rollOverride" : 0, "connected" : False }
-    
-    
-    bones_dict["anus_joint"]= {"head" : amwi * anus_head, "tail" : amwi * anus_tail, "roll" : 7.1, "rollOverride" : 0, "connected" : False }
+    if has_gens:
+        bones_dict["vagina_joint01.R"]= {"head" : amwi * vagina_joint01_R_head, "tail" : amwi * vagina_joint01_R_tail, "roll" : 90, "rollOverride" : 0, "connected" : False }
+        bones_dict["vagina_joint01.L"]= {"head" : amwi * vagina_joint01_L_head, "tail" : amwi * vagina_joint01_L_tail, "roll" : -90, "rollOverride" : 0, "connected" : False }
+
+        bones_dict["vagina_end.R"]= {"head" : amwi * vagina_end_R_head, "tail" : amwi * vagina_end_R_tail, "roll" : 0, "rollOverride" : 0, "connected" : False }
+        bones_dict["vagina_end.L"]= {"head" : amwi * vagina_end_L_head, "tail" : amwi * vagina_end_L_tail, "roll" : 0, "rollOverride" : 0, "connected" : False }
+
+        bones_dict["anus_joint"]= {"head" : amwi * anus_head, "tail" : amwi * anus_tail, "roll" : 7.1, "rollOverride" : 0, "connected" : False }

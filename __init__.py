@@ -89,6 +89,7 @@ if "bpy" in locals():
     imp.reload(clear_armature_rotation)
     imp.reload(tools_message_box)
 
+    imp.reload(diffeomorphic_merge_geografts)
     imp.reload(exporter_unreal)
     imp.reload(importer_g3f)
     imp.reload(importer_g3f_morphs)
@@ -118,6 +119,7 @@ else:
     from . import clear_armature_rotation
     from . import tools_message_box
 
+    from . import diffeomorphic_merge_geografts
     from . import exporter_unreal
     from . import importer_g3f_morphs
     from . import exporter_fake_bones
@@ -353,7 +355,7 @@ class EXPORT_PT_VXModToUnreal(bpy.types.Panel):
         missing = []
         if not operator_exists("gmtt.object_strip_and_clean"):
             missing.append("Game Mod Tiny Tools (GMTT)")
-        if not operator_exists("daz.merge_geografts"):
+        if not geograft_data_available():
             missing.append("Diffeomorphic (import_daz)")
         if missing:
             box = layout.box()
@@ -829,8 +831,8 @@ class MESH_OT_Switch_To_VX_Vertex_Groups(bpy.types.Operator):
             "ball_joint.R" : [ "rMetatarsals","rBigToe","rSmallToe1", "rSmallToe2", "rSmallToe3", "rSmallToe4"]
         } '''
 
-        head_joint02 = {
-            "head_joint02": ['head', 'upperTeeth', 'lowerJaw', 'lEye', 'rEye', 'lEar', 'rEar','rBrowInner', 'rBrowMid', 'rBrowOuter', 'lBrowInner', 'lBrowMid', 'lBrowOuter', 'CenterBrow', 'MidNoseBridge', 'lEyelidInner', 'lEyelidUpperInner', 'lEyelidUpper', 'lEyelidUpperOuter', 'lEyelidOuter', 'lEyelidLowerOuter', 'lEyelidLower', 'lEyelidLowerInner', 'rEyelidInner', 'rEyelidUpperInner', 'rEyelidUpper', 'rEyelidUpperOuter', 'rEyelidOuter', 'rEyelidLowerOuter', 'rEyelidLower', 'rEyelidLowerInner', 'lSquintInner', 'lSquintOuter', 'rSquintInner', 'rSquintOuter', 'lCheekUpper', 'rCheekUpper', 'Nose', 'lNostril', 'rNostril', 'lLipBelowNose', 'rLipBelowNose', 'lLipUpperOuter', 'lLipUpperInner', 'LipUpperMiddle', 'rLipUpperInner', 'rLipUpperOuter', 'lLipNasolabialCrease', 'rLipNasolabialCrease', 'lNasolabialUpper', 'rNasolabialUpper', 'lNasolabialMiddle', 'rNasolabialMiddle', 'tongue01', 'lNasolabialLower', 'rNasolabialLower', 'lNasolabialMouthCorner', 'rNasolabialMouthCorner', 'lLipCorner', 'lLipLowerOuter', 'lLipLowerInner', 'LipLowerMiddle', 'rLipLowerInner', 'rLipLowerOuter', 'rLipCorner', 'LipBelow', 'Chin', 'lCheekLower', 'rCheekLower', 'BelowJaw', 'lJawClench', 'rJawClench']
+        head = {
+            "head": ['head', 'upperTeeth', 'lowerJaw', 'lEye', 'rEye', 'lEar', 'rEar','rBrowInner', 'rBrowMid', 'rBrowOuter', 'lBrowInner', 'lBrowMid', 'lBrowOuter', 'CenterBrow', 'MidNoseBridge', 'lEyelidInner', 'lEyelidUpperInner', 'lEyelidUpper', 'lEyelidUpperOuter', 'lEyelidOuter', 'lEyelidLowerOuter', 'lEyelidLower', 'lEyelidLowerInner', 'rEyelidInner', 'rEyelidUpperInner', 'rEyelidUpper', 'rEyelidUpperOuter', 'rEyelidOuter', 'rEyelidLowerOuter', 'rEyelidLower', 'rEyelidLowerInner', 'lSquintInner', 'lSquintOuter', 'rSquintInner', 'rSquintOuter', 'lCheekUpper', 'rCheekUpper', 'Nose', 'lNostril', 'rNostril', 'lLipBelowNose', 'rLipBelowNose', 'lLipUpperOuter', 'lLipUpperInner', 'LipUpperMiddle', 'rLipUpperInner', 'rLipUpperOuter', 'lLipNasolabialCrease', 'rLipNasolabialCrease', 'lNasolabialUpper', 'rNasolabialUpper', 'lNasolabialMiddle', 'rNasolabialMiddle', 'tongue01', 'lNasolabialLower', 'rNasolabialLower', 'lNasolabialMouthCorner', 'rNasolabialMouthCorner', 'lLipCorner', 'lLipLowerOuter', 'lLipLowerInner', 'LipLowerMiddle', 'rLipLowerInner', 'rLipLowerOuter', 'rLipCorner', 'LipBelow', 'Chin', 'lCheekLower', 'rCheekLower', 'BelowJaw', 'lJawClench', 'rJawClench']
         }
 
 
@@ -854,24 +856,24 @@ class MESH_OT_Switch_To_VX_Vertex_Groups(bpy.types.Operator):
         #mergeSubgroupsIntoGroup(obj_object, ball_joint_L) 
         #mergeSubgroupsIntoGroup(obj_object, ball_joint_R) 
         #
-        ankle_joint_L = {
-            "ankle_joint.L" : [ "lFoot","lHeel","lMetatarsals"]
+        foot_L = {
+            "foot.L" : [ "lFoot","lHeel","lMetatarsals"]
         }
-        ankle_joint_R = {
-            "ankle_joint.R" : [ "rFoot","rHeel","rMetatarsals"]
+        foot_R = {
+            "foot.R" : [ "rFoot","rHeel","rMetatarsals"]
         }
-        mergeSubgroupsIntoGroup(obj_object, ankle_joint_L) 
-        mergeSubgroupsIntoGroup(obj_object, ankle_joint_R) 
-        #mergeSubgroupsIntoGroup(obj_object, hip_joint_L)                
-        #mergeSubgroupsIntoGroup(obj_object, hip_joint_R)   
-        #mergeSubgroupsIntoGroup(obj_object, shoulder_joint_L)  
-        #mergeSubgroupsIntoGroup(obj_object, shoulder_joint_R)  
-        mergeSubgroupsIntoGroup(obj_object, head_joint02)  
+        mergeSubgroupsIntoGroup(obj_object, foot_L)
+        mergeSubgroupsIntoGroup(obj_object, foot_R)
+        #mergeSubgroupsIntoGroup(obj_object, thigh_L)
+        #mergeSubgroupsIntoGroup(obj_object, thigh_R)
+        #mergeSubgroupsIntoGroup(obj_object, upperarm_L)
+        #mergeSubgroupsIntoGroup(obj_object, upperarm_R)
+        mergeSubgroupsIntoGroup(obj_object, head)
         #
         head_weights_matching = [
-        ["head", "head", "head_joint02"],
+        ["head", "head", "head"],
         ["Chin", "Chin", "chin_joint01"],
-        ["LipBelow", "BelowJaw", "lower_jaw_jointEnd"],
+        ["LipBelow", "BelowJaw", "lower_jaw_end"],
         ["lowerJaw","lJawClench","rJawClench","lower_jaw_joint01"],
         ["Nose","MidNoseBridge","lNostril","rNostril","nose_joint02"],
         ["lNasolabialUpper","lNasolabialMiddle","lCheekUpper","lCheekLower","cheek_joint01.L"],
@@ -882,23 +884,23 @@ class MESH_OT_Switch_To_VX_Vertex_Groups(bpy.types.Operator):
         ["rLipCorner","rLipLowerOuter","lower_lip_joint02.R"],
         ["lLipLowerInner","lower_lip_joint03.L"],
         ["rLipLowerInner","lower_lip_joint03.R"],
-        ["LipLowerMiddle","lower_lip_jointEnd.L"],
-        ["LipLowerMiddle","lower_lip_jointEnd.R"],
+        ["LipLowerMiddle","lower_lip_end.L"],
+        ["LipLowerMiddle","lower_lip_end.R"],
         ["lNasolabialMiddle","upper_lip_joint01.L"],
         ["rNasolabialMiddle","upper_lip_joint01.R"],
         ["lLipUpperOuter","lLipNasolabialCrease","upper_lip_joint02.L"],
         ["rLipUpperOuter","rLipNasolabialCrease","upper_lip_joint02.R"],
         ["lLipBelowNose","lLipUpperInner","upper_lip_joint03.L"],
         ["rLipBelowNose","rLipUpperInner","upper_lip_joint03.R"],
-        ["LipUpperMiddle","upper_lip_jointEnd.L"],
-        ["LipUpperMiddle","upper_lip_jointEnd.R"],
+        ["LipUpperMiddle","upper_lip_end.L"],
+        ["LipUpperMiddle","upper_lip_end.R"],
         ["lBrowInner","eye_brow_joint01.L"],
         ["rBrowInner","eye_brow_joint01.R"],
         ["lBrowMid","eye_brow_joint02.L"],
         ["rBrowMid","eye_brow_joint02.R"],
-        ["lBrowOuter","eye_brow_jointEnd.L"],
-        ["rBrowOuter","eye_brow_jointEnd.R"],
-        ["CenterBrow","forehead_jointEnd"],
+        ["lBrowOuter","eye_brow_end.L"],
+        ["rBrowOuter","eye_brow_end.R"],
+        ["CenterBrow","forehead_end"],
         ["lEar","ear_joint01.L"],
         ["rEar","ear_joint01.R"]
         ]        
@@ -1014,36 +1016,36 @@ class MESH_OT_Switch_To_VX_Vertex_Groups(bpy.types.Operator):
         #mergeSubgroupsIntoGroup(obj_object, genesis3Toes)
 
         #add any missing vertex groups
-        all_vertex_groups = ['base', 
-                             'spine_joint01', 'spine_joint02', 'spine_joint03', 'spine_joint04', 'spine_jointEnd', 
-                             'neck_joint01', 'neck_jointEnd', 
-                             'head_joint01', 'head_joint02', 
-                             'lower_jaw_joint01', 'lower_jaw_jointEnd', 
-                             'chin_joint01', 'chin_jointEnd', 
-                             'lower_lip_joint01.R', 'lower_lip_joint02.R', 'lower_lip_joint03.R', 'lower_lip_jointEnd.R', 
-                             'lower_lip_joint01.L', 'lower_lip_joint02.L', 'lower_lip_joint03.L', 'lower_lip_jointEnd.L', 
-                             'upper_lip_joint01.L', 'upper_lip_joint02.L', 'upper_lip_joint03.L', 'upper_lip_jointEnd.L', 
-                             'upper_lip_joint01.R', 'upper_lip_joint02.R', 'upper_lip_joint03.R', 'upper_lip_jointEnd.R', 
-                             'eye_socket_joint.L', 'eye_joint.L', 'eye_brow_joint01.L', 'eye_brow_joint02.L', 'eye_brow_jointEnd.L', 'eye_socket_joint.R', 'eye_joint.R', 'eye_brow_joint01.R', 'eye_brow_joint02.R', 'eye_brow_jointEnd.R', 
-                             'nose_joint01', 'nose_joint02', 'nose_jointEnd', 
-                             'forehead_joint01', 'forehead_jointEnd', 
-                             'cheek_joint01.L', 'cheek_jointEnd.L', 'cheek_joint01.R', 'cheek_jointEnd.R', 
-                             'ear_joint01.L', 'ear_jointEnd.L', 'ear_joint01.R', 'ear_jointEnd.R', 
-                             'head_jointEnd', 
-                             'clavicle_joint.L', 'shoulder_joint.L', 'elbow_joint.L', 'forearm_twist_joint.L', 'wrist_joint.L', 
-                             'finger01_joint01.L', 'finger01_joint02.L', 'finger01_joint03.L', 'finger01_jointEnd.L', 'finger02_joint01.L', 'finger02_joint02.L', 'finger02_joint03.L', 'finger02_joint04.L', 'finger02_jointEnd.L', 'finger03_joint01.L', 'finger03_joint02.L', 'finger03_joint03.L', 'finger03_joint04.L', 'finger03_jointEnd.L', 'finger04_joint01.L', 'finger04_joint02.L', 'finger04_joint03.L', 'finger04_joint04.L', 'finger04_jointEnd.L', 'finger05_joint01.L', 'finger05_joint02.L', 'finger05_joint03.L', 'finger05_joint04.L', 'finger05_jointEnd.L', 
-                             'clavicle_joint.R', 'shoulder_joint.R', 'elbow_joint.R', 'forearm_twist_joint.R', 'wrist_joint.R', 
-                             'finger01_joint01.R', 'finger01_joint02.R', 'finger01_joint03.R', 'finger01_jointEnd.R', 'finger02_joint01.R', 'finger02_joint02.R', 'finger02_joint03.R', 'finger02_joint04.R', 'finger02_jointEnd.R', 'finger03_joint01.R', 'finger03_joint02.R', 'finger03_joint03.R', 'finger03_joint04.R', 'finger03_jointEnd.R', 'finger04_joint01.R', 'finger04_joint02.R', 'finger04_joint03.R', 'finger04_joint04.R', 'finger04_jointEnd.R', 'finger05_joint01.R', 'finger05_joint02.R', 'finger05_joint03.R', 'finger05_joint04.R', 'finger05_jointEnd.R', 
-                             'breast_joint.L', 'breast_scale_joint.L', 'nipple_joint01.L', 'nipple_jointEnd.L', 
-                             'breast_joint.R', 'breast_scale_joint.R', 'nipple_joint01.R', 'nipple_jointEnd.R', 
-                             'rib_joint01.L', 'rib_jointEnd.L', 'rib_joint01.R', 'rib_jointEnd.R', 
-                             'stomach_joint01', 'stomach_jointEnd', 
-                             'hip_joint.L', 'knee_joint.L', 'ankle_joint.L', 'ball_joint.L', 
-                             'hip_joint.R', 'knee_joint.R', 'ankle_joint.R', 'ball_joint.R', 
-                             'penis_joint01', 'penis_joint02', 'penis_joint03', 'penis_jointEnd', 
-                             'testicles_joint01', 'testicles_joint02', 'testicles_jointEnd', 
-                             'vagina_joint01.L', 'vagina_joint01.R', 'vagina_jointEnd.L', 'vagina_jointEnd.R', 
-                             'butt_joint01.L', 'butt_jointEnd.L', 'butt_joint01.R', 'butt_jointEnd.R', 
+        all_vertex_groups = ['base',
+                             'spine_01', 'spine_02', 'spine_03', 'spine_04', 'spine_05',
+                             'neck_01', 'neck_02',
+                             'head',
+                             'lower_jaw_joint01', 'lower_jaw_end',
+                             'chin_joint01', 'chin_end',
+                             'lower_lip_joint01.R', 'lower_lip_joint02.R', 'lower_lip_joint03.R', 'lower_lip_end.R',
+                             'lower_lip_joint01.L', 'lower_lip_joint02.L', 'lower_lip_joint03.L', 'lower_lip_end.L',
+                             'upper_lip_joint01.L', 'upper_lip_joint02.L', 'upper_lip_joint03.L', 'upper_lip_end.L',
+                             'upper_lip_joint01.R', 'upper_lip_joint02.R', 'upper_lip_joint03.R', 'upper_lip_end.R',
+                             'eye_socket_joint.L', 'eye_joint.L', 'eye_brow_joint01.L', 'eye_brow_joint02.L', 'eye_brow_end.L', 'eye_socket_joint.R', 'eye_joint.R', 'eye_brow_joint01.R', 'eye_brow_joint02.R', 'eye_brow_end.R',
+                             'nose_joint01', 'nose_joint02', 'nose_end',
+                             'forehead_joint01', 'forehead_end',
+                             'cheek_joint01.L', 'cheek_end.L', 'cheek_joint01.R', 'cheek_end.R',
+                             'ear_joint01.L', 'ear_end.L', 'ear_joint01.R', 'ear_end.R',
+                             'head_end',
+                             'clavicle.L', 'upperarm.L', 'upperarm_twist_01.L', 'upperarm_twist_02.L', 'lowerarm.L', 'lowerarm_twist_01.L', 'lowerarm_twist_02.L', 'hand.L',
+                             'thumb_01.L', 'thumb_02.L', 'thumb_03.L', 'thumb_end.L', 'index_metacarpal.L', 'index_01.L', 'index_02.L', 'index_03.L', 'index_end.L', 'middle_metacarpal.L', 'middle_01.L', 'middle_02.L', 'middle_03.L', 'middle_end.L', 'ring_metacarpal.L', 'ring_01.L', 'ring_02.L', 'ring_03.L', 'ring_end.L', 'pinky_metacarpal.L', 'pinky_01.L', 'pinky_02.L', 'pinky_03.L', 'pinky_end.L',
+                             'clavicle.R', 'upperarm.R', 'upperarm_twist_01.R', 'upperarm_twist_02.R', 'lowerarm.R', 'lowerarm_twist_01.R', 'lowerarm_twist_02.R', 'hand.R',
+                             'thumb_01.R', 'thumb_02.R', 'thumb_03.R', 'thumb_end.R', 'index_metacarpal.R', 'index_01.R', 'index_02.R', 'index_03.R', 'index_end.R', 'middle_metacarpal.R', 'middle_01.R', 'middle_02.R', 'middle_03.R', 'middle_end.R', 'ring_metacarpal.R', 'ring_01.R', 'ring_02.R', 'ring_03.R', 'ring_end.R', 'pinky_metacarpal.R', 'pinky_01.R', 'pinky_02.R', 'pinky_03.R', 'pinky_end.R',
+                             'breast_joint.L', 'breast_scale_joint.L', 'nipple_joint01.L', 'nipple_end.L',
+                             'breast_joint.R', 'breast_scale_joint.R', 'nipple_joint01.R', 'nipple_end.R',
+                             'rib_joint01.L', 'rib_end.L', 'rib_joint01.R', 'rib_end.R',
+                             'stomach_joint01', 'stomach_end',
+                             'thigh.L', 'thigh_twist_01.L', 'thigh_twist_02.L', 'calf.L', 'foot.L', 'ball.L',
+                             'thigh.R', 'thigh_twist_01.R', 'thigh_twist_02.R', 'calf.R', 'foot.R', 'ball.R',
+                             'penis_joint01', 'penis_joint02', 'penis_joint03', 'penis_end',
+                             'testicles_joint01', 'testicles_joint02', 'testicles_end',
+                             'vagina_joint01.L', 'vagina_joint01.R', 'vagina_end.L', 'vagina_end.R',
+                             'butt_joint01.L', 'butt_end.L', 'butt_joint01.R', 'butt_end.R',
                              'anus_joint'
                             ]
         for group in all_vertex_groups:

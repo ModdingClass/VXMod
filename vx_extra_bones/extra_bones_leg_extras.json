@@ -1,0 +1,20 @@
+[
+    {
+        "name": "hip_twist_end.L",
+        "head": [ "0.086452", "0.012776", "0.506923" ],
+        "tail": [ "0.086452", "0.012776", "0.422071" ],
+        "roll": "0.000002",
+        "parent": "pelvis",
+        "connected": false,
+        "deform": true
+    },
+    {
+        "name": "hip_twist_end.R",
+        "head": [ "-0.086452", "0.012776", "0.506923" ],
+        "tail": [ "-0.086452", "0.012776", "0.456923" ],
+        "roll": "89.999996",
+        "parent": "pelvis",
+        "connected": false,
+        "deform": true
+    }
+]

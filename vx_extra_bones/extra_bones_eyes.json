@@ -1,0 +1,38 @@
+[
+    {
+        "name": "eye_orbit.L",
+        "head": [ "0.033492", "-0.030848", "1.664089" ],
+        "tail": [ "0.033492", "-0.077621", "1.664089" ],
+        "roll": "0.000001",
+        "parent": "head",
+        "connected": false,
+        "deform": true
+    },
+    {
+        "name": "eye_joint.L",
+        "head": [ "0.033492", "-0.077621", "1.664089" ],
+        "tail": [ "0.043492", "-0.077621", "1.664089" ],
+        "roll": "-0.000002",
+        "parent": "eye_orbit.L",
+        "connected": false,
+        "deform": true
+    },
+    {
+        "name": "eye_orbit.R",
+        "head": [ "-0.033483", "-0.030848", "1.664104" ],
+        "tail": [ "-0.033483", "-0.077625", "1.664104" ],
+        "roll": "0.000001",
+        "parent": "head",
+        "connected": false,
+        "deform": true
+    },
+    {
+        "name": "eye_joint.R",
+        "head": [ "-0.033483", "-0.077625", "1.664104" ],
+        "tail": [ "-0.043483", "-0.077625", "1.664104" ],
+        "roll": "0.000002",
+        "parent": "eye_orbit.R",
+        "connected": false,
+        "deform": true
+    }
+]

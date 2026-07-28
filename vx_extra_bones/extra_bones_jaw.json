@@ -1,0 +1,38 @@
+[
+    {
+        "name": "lower_jaw_joint01",
+        "head": [ "0.000082", "-0.000496", "1.622504" ],
+        "tail": [ "0.000331", "-0.011018", "1.605176" ],
+        "roll": "-0.000000",
+        "parent": "head",
+        "connected": false,
+        "deform": true
+    },
+    {
+        "name": "lower_jaw_end",
+        "head": [ "0.000331", "-0.011018", "1.605176" ],
+        "tail": [ "0.000125", "-0.038418", "1.581101" ],
+        "roll": "-0.000012",
+        "parent": "lower_jaw_joint01",
+        "connected": false,
+        "deform": true
+    },
+    {
+        "name": "chin_joint01",
+        "head": [ "0.000125", "-0.038418", "1.581101" ],
+        "tail": [ "0.000024", "-0.077945", "1.564072" ],
+        "roll": "-0.000032",
+        "parent": "lower_jaw_end",
+        "connected": false,
+        "deform": true
+    },
+    {
+        "name": "chin_end",
+        "head": [ "0.000024", "-0.077945", "1.564072" ],
+        "tail": [ "0.005024", "-0.077945", "1.564072" ],
+        "roll": "-0.000022",
+        "parent": "chin_joint01",
+        "connected": false,
+        "deform": false
+    }
+]

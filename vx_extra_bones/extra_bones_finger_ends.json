@@ -1,0 +1,92 @@
+[
+    {
+        "name": "thumb_end.L",
+        "head": [ "0.754195", "-0.106675", "1.422317" ],
+        "tail": [ "0.754195", "-0.106675", "1.427317" ],
+        "roll": "-45.478323",
+        "parent": "thumb_03.L",
+        "connected": false,
+        "deform": false
+    },
+    {
+        "name": "index_end.L",
+        "head": [ "0.829480", "-0.067216", "1.459982" ],
+        "tail": [ "0.829480", "-0.067216", "1.464982" ],
+        "roll": "-6.941949",
+        "parent": "index_03.L",
+        "connected": false,
+        "deform": false
+    },
+    {
+        "name": "middle_end.L",
+        "head": [ "0.843027", "-0.043159", "1.469036" ],
+        "tail": [ "0.843027", "-0.043159", "1.474036" ],
+        "roll": "5.887335",
+        "parent": "middle_03.L",
+        "connected": false,
+        "deform": false
+    },
+    {
+        "name": "ring_end.L",
+        "head": [ "0.830692", "-0.016213", "1.470700" ],
+        "tail": [ "0.830692", "-0.016213", "1.475700" ],
+        "roll": "9.038821",
+        "parent": "ring_03.L",
+        "connected": false,
+        "deform": false
+    },
+    {
+        "name": "pinky_end.L",
+        "head": [ "0.804614", "0.007998", "1.468961" ],
+        "tail": [ "0.804614", "0.007998", "1.473961" ],
+        "roll": "15.144450",
+        "parent": "pinky_03.L",
+        "connected": false,
+        "deform": false
+    },
+    {
+        "name": "thumb_end.R",
+        "head": [ "-0.754195", "-0.106675", "1.422317" ],
+        "tail": [ "-0.754195", "-0.106675", "1.427317" ],
+        "roll": "45.478323",
+        "parent": "thumb_03.R",
+        "connected": false,
+        "deform": false
+    },
+    {
+        "name": "index_end.R",
+        "head": [ "-0.829480", "-0.067216", "1.459982" ],
+        "tail": [ "-0.829480", "-0.067216", "1.464982" ],
+        "roll": "6.941949",
+        "parent": "index_03.R",
+        "connected": false,
+        "deform": false
+    },
+    {
+        "name": "middle_end.R",
+        "head": [ "-0.843027", "-0.043159", "1.469036" ],
+        "tail": [ "-0.843027", "-0.043159", "1.474036" ],
+        "roll": "-5.887335",
+        "parent": "middle_03.R",
+        "connected": false,
+        "deform": false
+    },
+    {
+        "name": "ring_end.R",
+        "head": [ "-0.830692", "-0.016213", "1.470700" ],
+        "tail": [ "-0.830692", "-0.016213", "1.475700" ],
+        "roll": "-9.038821",
+        "parent": "ring_03.R",
+        "connected": false,
+        "deform": false
+    },
+    {
+        "name": "pinky_end.R",
+        "head": [ "-0.804614", "0.007998", "1.468961" ],
+        "tail": [ "-0.804614", "0.007998", "1.473961" ],
+        "roll": "-15.144450",
+        "parent": "pinky_03.R",
+        "connected": false,
+        "deform": false
+    }
+]

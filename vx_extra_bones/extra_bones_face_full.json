@@ -1,0 +1,398 @@
+[
+    {
+        "name": "cheek_joint01.L",
+        "head": [ "0.048752", "-0.038767", "1.657028" ],
+        "tail": [ "0.047676", "-0.071757", "1.632628" ],
+        "roll": "0.000012",
+        "parent": "head",
+        "connected": false,
+        "deform": true
+    },
+    {
+        "name": "cheek_end.L",
+        "head": [ "0.047676", "-0.071757", "1.632628" ],
+        "tail": [ "0.057676", "-0.071757", "1.632628" ],
+        "roll": "-0.000005",
+        "parent": "cheek_joint01.L",
+        "connected": false,
+        "deform": false
+    },
+    {
+        "name": "cheek_joint01.R",
+        "head": [ "-0.048665", "-0.038731", "1.656999" ],
+        "tail": [ "-0.047571", "-0.071637", "1.632620" ],
+        "roll": "0.000001",
+        "parent": "head",
+        "connected": false,
+        "deform": true
+    },
+    {
+        "name": "cheek_end.R",
+        "head": [ "-0.047571", "-0.071637", "1.632620" ],
+        "tail": [ "-0.057571", "-0.071637", "1.632620" ],
+        "roll": "0.000010",
+        "parent": "cheek_joint01.R",
+        "connected": false,
+        "deform": false
+    },
+    {
+        "name": "ear_joint01.L",
+        "head": [ "0.074823", "0.017176", "1.657422" ],
+        "tail": [ "0.073521", "0.012445", "1.627917" ],
+        "roll": "-0.000160",
+        "parent": "head",
+        "connected": false,
+        "deform": true
+    },
+    {
+        "name": "ear_end.L",
+        "head": [ "0.073521", "0.012445", "1.627917" ],
+        "tail": [ "0.083521", "0.012445", "1.627917" ],
+        "roll": "-0.000003",
+        "parent": "ear_joint01.L",
+        "connected": false,
+        "deform": false
+    },
+    {
+        "name": "ear_joint01.R",
+        "head": [ "-0.074793", "0.017175", "1.657426" ],
+        "tail": [ "-0.073497", "0.012444", "1.627922" ],
+        "roll": "-0.000334",
+        "parent": "head",
+        "connected": false,
+        "deform": true
+    },
+    {
+        "name": "ear_end.R",
+        "head": [ "-0.073497", "0.012444", "1.627922" ],
+        "tail": [ "-0.083497", "0.012444", "1.627922" ],
+        "roll": "-0.000009",
+        "parent": "ear_joint01.R",
+        "connected": false,
+        "deform": false
+    },
+    {
+        "name": "eye_orbit.L",
+        "head": [ "0.033492", "-0.030848", "1.664089" ],
+        "tail": [ "0.033492", "-0.077621", "1.664089" ],
+        "roll": "0.000001",
+        "parent": "head",
+        "connected": false,
+        "deform": true
+    },
+    {
+        "name": "eye_brow_joint01.L",
+        "head": [ "0.014808", "-0.092139", "1.693964" ],
+        "tail": [ "0.044751", "-0.081224", "1.694348" ],
+        "roll": "0.000002",
+        "parent": "eye_orbit.L",
+        "connected": false,
+        "deform": true
+    },
+    {
+        "name": "eye_brow_joint02.L",
+        "head": [ "0.044751", "-0.081224", "1.694348" ],
+        "tail": [ "0.053608", "-0.075584", "1.688450" ],
+        "roll": "-0.000009",
+        "parent": "eye_brow_joint01.L",
+        "connected": false,
+        "deform": true
+    },
+    {
+        "name": "eye_brow_end.L",
+        "head": [ "0.053608", "-0.075584", "1.688450" ],
+        "tail": [ "0.063608", "-0.075584", "1.688450" ],
+        "roll": "-0.000005",
+        "parent": "eye_brow_joint02.L",
+        "connected": false,
+        "deform": false
+    },
+    {
+        "name": "eye_joint.L",
+        "head": [ "0.033492", "-0.077621", "1.664089" ],
+        "tail": [ "0.043492", "-0.077621", "1.664089" ],
+        "roll": "-0.000002",
+        "parent": "eye_orbit.L",
+        "connected": false,
+        "deform": true
+    },
+    {
+        "name": "eye_orbit.R",
+        "head": [ "-0.033483", "-0.030848", "1.664104" ],
+        "tail": [ "-0.033483", "-0.077625", "1.664104" ],
+        "roll": "0.000001",
+        "parent": "head",
+        "connected": false,
+        "deform": true
+    },
+    {
+        "name": "eye_brow_joint01.R",
+        "head": [ "-0.014795", "-0.092172", "1.693965" ],
+        "tail": [ "-0.044695", "-0.081188", "1.694341" ],
+        "roll": "0.000006",
+        "parent": "eye_orbit.R",
+        "connected": false,
+        "deform": true
+    },
+    {
+        "name": "eye_brow_joint02.R",
+        "head": [ "-0.044695", "-0.081188", "1.694341" ],
+        "tail": [ "-0.053571", "-0.075575", "1.688450" ],
+        "roll": "0.000017",
+        "parent": "eye_brow_joint01.R",
+        "connected": false,
+        "deform": true
+    },
+    {
+        "name": "eye_brow_end.R",
+        "head": [ "-0.053571", "-0.075575", "1.688450" ],
+        "tail": [ "-0.063571", "-0.075575", "1.688450" ],
+        "roll": "0.000005",
+        "parent": "eye_brow_joint02.R",
+        "connected": false,
+        "deform": false
+    },
+    {
+        "name": "eye_joint.R",
+        "head": [ "-0.033483", "-0.077625", "1.664104" ],
+        "tail": [ "-0.043483", "-0.077625", "1.664104" ],
+        "roll": "0.000002",
+        "parent": "eye_orbit.R",
+        "connected": false,
+        "deform": true
+    },
+    {
+        "name": "forehead_joint01",
+        "head": [ "0.000014", "-0.090363", "1.671475" ],
+        "tail": [ "0.000009", "-0.093861", "1.696636" ],
+        "roll": "-0.000001",
+        "parent": "head",
+        "connected": false,
+        "deform": true
+    },
+    {
+        "name": "forehead_end",
+        "head": [ "0.000009", "-0.093861", "1.696636" ],
+        "tail": [ "-0.009991", "-0.093861", "1.696636" ],
+        "roll": "-0.000003",
+        "parent": "forehead_joint01",
+        "connected": false,
+        "deform": true
+    },
+    {
+        "name": "head_end",
+        "head": [ "0.000012", "0.012093", "1.777201" ],
+        "tail": [ "0.020012", "0.012093", "1.777201" ],
+        "roll": "0.000003",
+        "parent": "head",
+        "connected": false,
+        "deform": true
+    },
+    {
+        "name": "lower_jaw_joint01",
+        "head": [ "0.000082", "-0.000496", "1.622504" ],
+        "tail": [ "0.000331", "-0.011018", "1.605176" ],
+        "roll": "-0.000000",
+        "parent": "head",
+        "connected": false,
+        "deform": true
+    },
+    {
+        "name": "lower_jaw_end",
+        "head": [ "0.000331", "-0.011018", "1.605176" ],
+        "tail": [ "0.000125", "-0.038418", "1.581101" ],
+        "roll": "-0.000012",
+        "parent": "lower_jaw_joint01",
+        "connected": false,
+        "deform": true
+    },
+    {
+        "name": "chin_joint01",
+        "head": [ "0.000125", "-0.038418", "1.581101" ],
+        "tail": [ "0.000024", "-0.077945", "1.564072" ],
+        "roll": "-0.000032",
+        "parent": "lower_jaw_end",
+        "connected": false,
+        "deform": true
+    },
+    {
+        "name": "chin_end",
+        "head": [ "0.000024", "-0.077945", "1.564072" ],
+        "tail": [ "0.005024", "-0.077945", "1.564072" ],
+        "roll": "-0.000022",
+        "parent": "chin_joint01",
+        "connected": false,
+        "deform": false
+    },
+    {
+        "name": "lower_lip_joint01.L",
+        "head": [ "0.046369", "-0.049408", "1.593344" ],
+        "tail": [ "0.027050", "-0.079157", "1.598654" ],
+        "roll": "-0.000017",
+        "parent": "lower_jaw_joint01",
+        "connected": false,
+        "deform": true
+    },
+    {
+        "name": "lower_lip_joint02.L",
+        "head": [ "0.027050", "-0.079157", "1.598654" ],
+        "tail": [ "0.015077", "-0.088530", "1.598264" ],
+        "roll": "0.000020",
+        "parent": "lower_lip_joint01.L",
+        "connected": false,
+        "deform": true
+    },
+    {
+        "name": "lower_lip_joint03.L",
+        "head": [ "0.015077", "-0.088530", "1.598264" ],
+        "tail": [ "0.001021", "-0.094529", "1.597162" ],
+        "roll": "-0.000022",
+        "parent": "lower_lip_joint02.L",
+        "connected": false,
+        "deform": true
+    },
+    {
+        "name": "lower_lip_end.L",
+        "head": [ "0.001021", "-0.094529", "1.597162" ],
+        "tail": [ "0.006021", "-0.094529", "1.597162" ],
+        "roll": "-0.000160",
+        "parent": "lower_lip_joint03.L",
+        "connected": false,
+        "deform": false
+    },
+    {
+        "name": "lower_lip_joint01.R",
+        "head": [ "-0.046038", "-0.049247", "1.593495" ],
+        "tail": [ "-0.027020", "-0.079155", "1.598671" ],
+        "roll": "-0.000101",
+        "parent": "lower_jaw_joint01",
+        "connected": false,
+        "deform": true
+    },
+    {
+        "name": "lower_lip_joint02.R",
+        "head": [ "-0.027020", "-0.079155", "1.598671" ],
+        "tail": [ "-0.015016", "-0.088502", "1.598257" ],
+        "roll": "-0.000041",
+        "parent": "lower_lip_joint02.R",
+        "connected": false,
+        "deform": true
+    },
+    {
+        "name": "lower_lip_joint03.R",
+        "head": [ "-0.015016", "-0.088502", "1.598257" ],
+        "tail": [ "-0.000979", "-0.094529", "1.597162" ],
+        "roll": "-0.000005",
+        "parent": "lower_lip_joint02.R",
+        "connected": false,
+        "deform": true
+    },
+    {
+        "name": "lower_lip_end.R",
+        "head": [ "-0.000979", "-0.094529", "1.597162" ],
+        "tail": [ "-0.005979", "-0.094529", "1.597162" ],
+        "roll": "-0.000013",
+        "parent": "lower_lip_joint03.R",
+        "connected": false,
+        "deform": false
+    },
+    {
+        "name": "nose_joint01",
+        "head": [ "0.000014", "-0.090363", "1.671475" ],
+        "tail": [ "0.000014", "-0.090363", "1.634646" ],
+        "roll": "0.000002",
+        "parent": "head",
+        "connected": false,
+        "deform": true
+    },
+    {
+        "name": "nose_joint02",
+        "head": [ "0.000014", "-0.090363", "1.634646" ],
+        "tail": [ "0.000013", "-0.106766", "1.634646" ],
+        "roll": "-0.000004",
+        "parent": "nose_joint01",
+        "connected": false,
+        "deform": true
+    },
+    {
+        "name": "nose_end",
+        "head": [ "0.000013", "-0.106766", "1.634646" ],
+        "tail": [ "-0.009987", "-0.106766", "1.634646" ],
+        "roll": "0.000004",
+        "parent": "nose_joint02",
+        "connected": false,
+        "deform": false
+    },
+    {
+        "name": "upper_lip_joint01.L",
+        "head": [ "0.054069", "-0.050287", "1.611422" ],
+        "tail": [ "0.024676", "-0.078640", "1.599569" ],
+        "roll": "-0.000009",
+        "parent": "head",
+        "connected": false,
+        "deform": true
+    },
+    {
+        "name": "upper_lip_joint02.L",
+        "head": [ "0.024676", "-0.078640", "1.599569" ],
+        "tail": [ "0.016516", "-0.086893", "1.606081" ],
+        "roll": "-0.000009",
+        "parent": "upper_lip_joint01.L",
+        "connected": false,
+        "deform": true
+    },
+    {
+        "name": "upper_lip_joint03.L",
+        "head": [ "0.016516", "-0.086893", "1.606081" ],
+        "tail": [ "0.003682", "-0.094791", "1.608738" ],
+        "roll": "-0.000010",
+        "parent": "upper_lip_joint02.L",
+        "connected": false,
+        "deform": true
+    },
+    {
+        "name": "upper_lip_end.L",
+        "head": [ "0.003682", "-0.094791", "1.608738" ],
+        "tail": [ "0.008682", "-0.094791", "1.608738" ],
+        "roll": "-0.000024",
+        "parent": "upper_lip_joint03.L",
+        "connected": false,
+        "deform": false
+    },
+    {
+        "name": "upper_lip_joint01.R",
+        "head": [ "-0.053815", "-0.050169", "1.611530" ],
+        "tail": [ "-0.024642", "-0.078639", "1.599579" ],
+        "roll": "0.000002",
+        "parent": "head",
+        "connected": false,
+        "deform": true
+    },
+    {
+        "name": "upper_lip_joint02.R",
+        "head": [ "-0.024642", "-0.078639", "1.599579" ],
+        "tail": [ "-0.016347", "-0.086749", "1.606047" ],
+        "roll": "0.000019",
+        "parent": "upper_lip_joint01.R",
+        "connected": false,
+        "deform": true
+    },
+    {
+        "name": "upper_lip_joint03.R",
+        "head": [ "-0.016347", "-0.086749", "1.606047" ],
+        "tail": [ "-0.003645", "-0.094769", "1.608733" ],
+        "roll": "-0.000007",
+        "parent": "upper_lip_joint02.R",
+        "connected": false,
+        "deform": true
+    },
+    {
+        "name": "upper_lip_end.R",
+        "head": [ "-0.003645", "-0.094769", "1.608733" ],
+        "tail": [ "-0.008645", "-0.094769", "1.608733" ],
+        "roll": "-0.000008",
+        "parent": "upper_lip_joint03.R",
+        "connected": false,
+        "deform": false
+    }
+]

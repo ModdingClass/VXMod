@@ -67,7 +67,7 @@ def export_fake_bones(exportfolderpath, bodyNo, ignoreSomeBones, ignoreMaleBones
         if mesh.parent == None or not "cone_" in mesh.name:
             continue
         if ignoreSomeBones == True:
-            if ("_jointEnd" in mesh.name and not mesh.name in ["cone_vagina_jointEnd.L", "cone_vagina_jointEnd.R", "cone_spine_jointEnd", "cone_neck_jointEnd", "cone_lower_jaw_jointEnd", "cone_forehead_jointEnd", "cone_head_jointEnd"]):
+            if ("_end" in mesh.name and not mesh.name in ["cone_vagina_end.L", "cone_vagina_end.R", "cone_spine_end", "cone_neck_end", "cone_lower_jaw_end", "cone_forehead_end", "cone_head_end"]):
                 continue
             if ("toe_joint" in mesh.name):
                 continue
