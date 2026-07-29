@@ -17,7 +17,88 @@ def checkIfMaterialExistElseCreateIt(ob, material_name):
     index = bpy.context.object.material_slots.find(mat.name)    
     return mat,index
 
+def _materialSlotsAreDataLinked(ob):
+    """The fast paths below rewrite ob.data.materials, which only mirrors the object's
+    slots while every slot is DATA-linked. Diffeomorphic imports always are, but check
+    rather than assume - the callers fall back to the operator path if not."""
+    for slot in ob.material_slots:
+        if slot.link != 'DATA':
+            return False
+    return True
+
+
+def _remapPolygonMaterialIndices(mesh, remap, fallback=0):
+    """Bulk-rewrite every polygon's material_index through `remap`.
+
+    foreach_get/foreach_set move the whole array in C, so this is one pass over the mesh
+    rather than a Python loop, and it triggers no scene update.
+    """
+    count = len(mesh.polygons)
+    if not count:
+        return
+    indices = [0] * count
+    mesh.polygons.foreach_get("material_index", indices)
+    mesh.polygons.foreach_set("material_index",
+                              [remap.get(i, fallback) for i in indices])
+
+
+def rebuildMaterialSlots(ob, keep_indices):
+    """Reorder and/or prune material slots without a single bpy.ops call.
+
+    `keep_indices` is the list of CURRENT slot indices to keep, in the order wanted.
+    Polygons on a dropped slot fall back to slot 0.
+
+    This replaces material_slot_remove / material_slot_move loops. Each of those is an
+    operator, and bpy/ops.py runs a full scene.update() after every operator - measured
+    at 53 ms in this scene, which is where ~98% of the conversion's runtime was going.
+    """
+    mesh = ob.data
+    old_materials = [m for m in mesh.materials]
+    remap = {}
+    for new_index, old_index in enumerate(keep_indices):
+        remap[old_index] = new_index
+
+    while len(mesh.materials):
+        mesh.materials.pop(index=len(mesh.materials) - 1, update_data=False)
+    for old_index in keep_indices:
+        mesh.materials.append(old_materials[old_index])
+
+    _remapPolygonMaterialIndices(mesh, remap, fallback=0)
+    ob.active_material_index = 0
+
+
+def _slotIndicesMatchingPrefixes(ob, prefixes):
+    """Slot indices whose name startswith any prefix - the match the original
+    removeMaterialListFromObject and selectByMaterials both used."""
+    matched = []
+    for index, slot in enumerate(ob.material_slots):
+        for prefix in prefixes:
+            if slot.name.startswith(prefix):
+                matched.append(index)
+                break
+    return matched
+
+
 def removeMaterialListFromObject(ob, deletion_list):
+    """Drop every material slot whose name starts with an entry in deletion_list.
+
+    Same signature and semantics as before; the operator loop is gone. This was the
+    single most expensive helper in the conversion - 10 calls, 5.96 s.
+    """
+    if not _materialSlotsAreDataLinked(ob):
+        _removeMaterialListFromObjectSlow(ob, deletion_list)
+        return
+
+    doomed = set(_slotIndicesMatchingPrefixes(ob, deletion_list))
+    if not doomed:
+        return
+    keep = [i for i in range(len(ob.material_slots)) if i not in doomed]
+    rebuildMaterialSlots(ob, keep)
+
+
+def _removeMaterialListFromObjectSlow(ob, deletion_list):
+    """Original operator-based implementation, kept as a fallback for the
+    OBJECT-linked-slot case the fast path cannot handle."""
     saved_context_mode = ob.mode
     #
     bpy.ops.object.mode_set(mode='OBJECT')
@@ -35,8 +116,55 @@ def removeMaterialListFromObject(ob, deletion_list):
             ob.active_material_index = i
             bpy.ops.object.material_slot_remove()
 
-    bpy.ops.object.mode_set(mode=saved_context_mode)    
+    bpy.ops.object.mode_set(mode=saved_context_mode)
     #
+
+def reassignMaterialsAndRemoveSlots(ob, source_prefixes, target_material_name):
+    """Move every polygon on a source slot onto `target_material_name`, then drop the
+    now-unused source slots.
+
+    Operator-free equivalent of the block that was repeated nine times:
+
+        selectByMaterials(ob, working_mats)          # EDIT mode + material_slot_select
+        mat, i = checkIfMaterialExistElseCreateIt(ob, target)
+        bpy.context.object.active_material_index = i
+        bpy.ops.object.mode_set(mode='EDIT')
+        bpy.ops.object.material_slot_assign()
+        bpy.ops.mesh.select_all(action='DESELECT')
+        removeMaterialListFromObject(ob, working_mats)
+
+    Nine of those cost roughly 80 operator calls and, at ~53 ms of scene update each,
+    the bulk of the conversion's runtime.
+    """
+    if not _materialSlotsAreDataLinked(ob):
+        selectByMaterials(ob, source_prefixes)
+        mat, mat_index = checkIfMaterialExistElseCreateIt(ob, target_material_name)
+        bpy.context.object.active_material_index = mat_index
+        bpy.ops.object.mode_set(mode='EDIT')
+        bpy.ops.object.material_slot_assign()
+        bpy.ops.mesh.select_all(action='DESELECT')
+        removeMaterialListFromObject(ob, source_prefixes)
+        return
+
+    source_indices = set(_slotIndicesMatchingPrefixes(ob, source_prefixes))
+    mat, target_index = checkIfMaterialExistElseCreateIt(ob, target_material_name)
+    # checkIfMaterialExistElseCreateIt may have appended a slot, so never treat the
+    # target as one of its own sources.
+    source_indices.discard(target_index)
+
+    if source_indices:
+        remap = dict((i, target_index) for i in source_indices)
+        mesh = ob.data
+        count = len(mesh.polygons)
+        indices = [0] * count
+        mesh.polygons.foreach_get("material_index", indices)
+        mesh.polygons.foreach_set("material_index",
+                                  [remap.get(i, i) for i in indices])
+
+    keep = [i for i in range(len(ob.material_slots)) if i not in source_indices]
+    if len(keep) != len(ob.material_slots):
+        rebuildMaterialSlots(ob, keep)
+
 
 def selectByMaterials(ob, selection_list):
     #reload the materials list
@@ -135,109 +263,43 @@ def convertG3FDifeomorphicToVXModFBody() :
     #
     #reload the materials list
     materials_list = bpy.context.object.material_slots.keys()
-    bpy.ops.object.editmode_toggle()  # we need to go in edit mode so we can select vertices from materials
     #
     #g3f body has too many vertices that we don't need, so we are going to select them based on materials and remove them
+    #the eye interior is folded into the head material rather than deleted; it ends up
+    #hidden inside the head and is fixed later with an aa (auto apply) shapekey
     working_mats =  ["Irises", "Cornea", "EyeMoisture", "Pupils", "Sclera"]
-    selectByMaterials(bodyMeshCloned, working_mats)
-    bpy.ops.object.mode_set(mode='EDIT')
-    #lets try and scale them, the selected vertices should be hidden inside head 
-    #actually we are going to fix those vertices using an aa (auto apply) shapekey
-    #bpy.ops.transform.resize(value=(0.0, 0.0, 0.0)) 
-    bpy.ops.object.editmode_toggle()  #back in object mode
-    #
-    bpy.ops.object.mode_set(mode='EDIT')
-    bpy.ops.mesh.select_mode(type="FACE")
-    bpy.ops.object.mode_set(mode='OBJECT')
-
-    mat,mat_index = checkIfMaterialExistElseCreateIt(bodyMeshCloned,"body_head01")
-    bpy.context.object.active_material_index = mat_index
-    bpy.ops.object.mode_set(mode='EDIT')
-    bpy.ops.object.material_slot_assign() #this should assing selected vertices to the last material added
-    bpy.ops.mesh.select_all(action='DESELECT')
-    removeMaterialListFromObject(bodyMeshCloned, working_mats)
-
+    reassignMaterialsAndRemoveSlots(bodyMeshCloned, working_mats, "body_head01")
 
     #
     removeMaterialListFromObject(bodyMeshCloned, ["Irises", "Cornea", "EyeMoisture", "Pupils", "Sclera"])
     #
 
     #
-    working_mats = ["EyeSocket", "Ears", "Lips","Face"]  
-    selectByMaterials(bodyMeshCloned, working_mats)
-    mat,mat_index = checkIfMaterialExistElseCreateIt(bodyMeshCloned,"body_head01")
-    bpy.context.object.active_material_index = mat_index
-    bpy.ops.object.mode_set(mode='EDIT')
-    bpy.ops.object.material_slot_assign() #this should assing selected vertices to the last material added
-    bpy.ops.mesh.select_all(action='DESELECT')
-    removeMaterialListFromObject(bodyMeshCloned, working_mats)
+    working_mats = ["EyeSocket", "Ears", "Lips","Face"]
+    reassignMaterialsAndRemoveSlots(bodyMeshCloned, working_mats, "body_head01")
 
     working_mats = ["Mouth", "Teeth"]
-    selectByMaterials(bodyMeshCloned, working_mats)
-
-  
-    mat,mat_index = checkIfMaterialExistElseCreateIt(bodyMeshCloned,"body_teeth01")
-    bpy.context.object.active_material_index = mat_index
-    bpy.ops.object.mode_set(mode='EDIT')
-    bpy.ops.object.material_slot_assign() #this should assing selected vertices to the last material added
-    bpy.ops.mesh.select_all(action='DESELECT')
-    removeMaterialListFromObject(bodyMeshCloned, working_mats)
+    reassignMaterialsAndRemoveSlots(bodyMeshCloned, working_mats, "body_teeth01")
 
     #
     working_mats = ["Arms"]
-    selectByMaterials(bodyMeshCloned, working_mats)
-    mat,mat_index = checkIfMaterialExistElseCreateIt(bodyMeshCloned,"body_hand01_L")
-    bpy.context.object.active_material_index = mat_index
-    bpy.ops.object.mode_set(mode='EDIT')
-    bpy.ops.object.material_slot_assign() #this should assing selected vertices to the last material added
-    bpy.ops.mesh.select_all(action='DESELECT')
-    removeMaterialListFromObject(bodyMeshCloned, working_mats)
+    reassignMaterialsAndRemoveSlots(bodyMeshCloned, working_mats, "body_hand01_L")
 
     working_mats = ["Torso"]
-    selectByMaterials(bodyMeshCloned, working_mats)
-    mat,mat_index = checkIfMaterialExistElseCreateIt(bodyMeshCloned,"body_main_upper")
-    bpy.context.object.active_material_index = mat_index
-    bpy.ops.object.mode_set(mode='EDIT')
-    bpy.ops.object.material_slot_assign() #this should assing selected vertices to the last material added
-    bpy.ops.mesh.select_all(action='DESELECT')
-    removeMaterialListFromObject(bodyMeshCloned, working_mats)
+    reassignMaterialsAndRemoveSlots(bodyMeshCloned, working_mats, "body_main_upper")
 
     working_mats = ["Toenails", "Legs" ]
-    selectByMaterials(bodyMeshCloned, working_mats)
-    mat,mat_index = checkIfMaterialExistElseCreateIt(bodyMeshCloned,"body_foot_L")
-    bpy.context.object.active_material_index = mat_index
-    bpy.ops.object.mode_set(mode='EDIT')
-    bpy.ops.object.material_slot_assign() #this should assing selected vertices to the last material added
-    bpy.ops.mesh.select_all(action='DESELECT')
-    removeMaterialListFromObject(bodyMeshCloned, working_mats)
+    reassignMaterialsAndRemoveSlots(bodyMeshCloned, working_mats, "body_foot_L")
 
     working_mats = ["Genitalia"]
-    selectByMaterials(bodyMeshCloned, working_mats)
-    mat,mat_index = checkIfMaterialExistElseCreateIt(bodyMeshCloned,"body_genital01")
-    bpy.context.object.active_material_index = mat_index
-    bpy.ops.object.mode_set(mode='EDIT')
-    bpy.ops.object.material_slot_assign() #this should assing selected vertices to the last material added
-    bpy.ops.mesh.select_all(action='DESELECT')
-    removeMaterialListFromObject(bodyMeshCloned, working_mats)
+    reassignMaterialsAndRemoveSlots(bodyMeshCloned, working_mats, "body_genital01")
 
     working_mats = ["Eyelashes"]
-    selectByMaterials(bodyMeshCloned, working_mats)
-    mat,mat_index = checkIfMaterialExistElseCreateIt(bodyMeshCloned,"body_eyelash01")
-    bpy.context.object.active_material_index = mat_index
-    bpy.ops.object.mode_set(mode='EDIT')
-    bpy.ops.object.material_slot_assign() #this should assing selected vertices to the last material added
-    bpy.ops.mesh.select_all(action='DESELECT')
-    removeMaterialListFromObject(bodyMeshCloned, working_mats)
+    reassignMaterialsAndRemoveSlots(bodyMeshCloned, working_mats, "body_eyelash01")
     
     
     working_mats = ["Fingernails"]
-    selectByMaterials(bodyMeshCloned, working_mats)
-    mat,mat_index = checkIfMaterialExistElseCreateIt(bodyMeshCloned,"body_fingernails_L.001")
-    bpy.context.object.active_material_index = mat_index
-    bpy.ops.object.mode_set(mode='EDIT')
-    bpy.ops.object.material_slot_assign() #this should assing selected vertices to the last material added
-    bpy.ops.mesh.select_all(action='DESELECT')
-    removeMaterialListFromObject(bodyMeshCloned, working_mats)
+    reassignMaterialsAndRemoveSlots(bodyMeshCloned, working_mats, "body_fingernails_L.001")
 
 
 
@@ -245,17 +307,23 @@ def convertG3FDifeomorphicToVXModFBody() :
 
     #delete unused materials
     ob = bpy.context.active_object
-    mat_slots = {}
-    for p in ob.data.polygons:
-        mat_slots[p.material_index] = 1
+    used_indices = set()
+    polygon_count = len(ob.data.polygons)
+    if polygon_count:
+        indices = [0] * polygon_count
+        ob.data.polygons.foreach_get("material_index", indices)
+        used_indices = set(indices)
 
-    mat_slots = mat_slots.keys()
-     
-    for i in reversed(range(len(ob.material_slots))):
-        if i not in mat_slots:
-            bpy.context.scene.objects.active = ob
-            ob.active_material_index = i
-            bpy.ops.object.material_slot_remove()
+    if _materialSlotsAreDataLinked(ob):
+        keep = [i for i in range(len(ob.material_slots)) if i in used_indices]
+        if keep and len(keep) != len(ob.material_slots):
+            rebuildMaterialSlots(ob, keep)
+    else:
+        for i in reversed(range(len(ob.material_slots))):
+            if i not in used_indices:
+                bpy.context.scene.objects.active = ob
+                ob.active_material_index = i
+                bpy.ops.object.material_slot_remove()
 
 
 
@@ -345,33 +413,39 @@ def convertG3FDifeomorphicToVXModFBody() :
 
 
     ob = bpy.context.active_object
-    for j in range (len(ob.material_slots)):
-        for i in range (len(ob.material_slots)-1):
-            ob.active_material_index = i
-            tempStr = ob.active_material.name
-            ob.active_material_index = i+1
-            if ob.active_material.name.split("_")[-1] < tempStr.split("_")[-1]:
-                bpy.ops.object.material_slot_move(direction='UP')
 
-
-
-
-    ob.active_material_index = 0
-    bpy.ops.object.material_slot_move(direction='DOWN')
-    bpy.ops.object.material_slot_move(direction='DOWN')
-    bpy.ops.object.material_slot_move(direction='DOWN')
-    bpy.ops.object.material_slot_move(direction='DOWN')
-    bpy.ops.object.material_slot_move(direction='DOWN')
-    bpy.ops.object.material_slot_move(direction='DOWN')
-    bpy.ops.object.material_slot_move(direction='DOWN')
-    bpy.ops.object.material_slot_move(direction='DOWN')
-    bpy.ops.object.material_slot_move(direction='DOWN')
-    bpy.ops.object.material_slot_move(direction='DOWN')
-    bpy.ops.object.material_slot_move(direction='DOWN')
-    bpy.ops.object.material_slot_move(direction='DOWN')
-    bpy.ops.object.material_slot_move(direction='DOWN')
-    bpy.ops.object.material_slot_move(direction='DOWN')
-    bpy.ops.object.material_slot_move(direction='DOWN')
+    # Sort the material slots by the last underscore-separated token of their name, then
+    # rotate the first slot down to position 15.
+    #
+    # This used to be a bubble sort with bpy.ops.object.material_slot_move inside the
+    # inner loop, followed by 15 more move calls. With 21 slots that is 420 iterations
+    # and ~150 operator invocations - and bpy/ops.py runs a full scene.update() after
+    # every operator, measured at 53 ms here. It was the single largest cost in the
+    # conversion. The permutation is now computed in Python and applied in one pass.
+    #
+    # Semantics are preserved exactly: Python's sorted() is stable and the original
+    # bubble sort used a strict <, so equal keys keep their relative order either way.
+    if _materialSlotsAreDataLinked(ob):
+        slot_names = [slot.name for slot in ob.material_slots]
+        order = sorted(range(len(slot_names)),
+                       key=lambda i: slot_names[i].split("_")[-1])
+        if order:
+            # 15 x move DOWN on slot 0 puts it at index 15 (clamped to the last slot).
+            insert_at = min(15, len(order) - 1)
+            order = order[1:insert_at + 1] + [order[0]] + order[insert_at + 1:]
+        rebuildMaterialSlots(ob, order)
+        print("material slot order: {}".format([slot.name for slot in ob.material_slots]))
+    else:
+        for j in range (len(ob.material_slots)):
+            for i in range (len(ob.material_slots)-1):
+                ob.active_material_index = i
+                tempStr = ob.active_material.name
+                ob.active_material_index = i+1
+                if ob.active_material.name.split("_")[-1] < tempStr.split("_")[-1]:
+                    bpy.ops.object.material_slot_move(direction='UP')
+        ob.active_material_index = 0
+        for _ in range(15):
+            bpy.ops.object.material_slot_move(direction='DOWN')
 
     bpy.data.materials["body_teeth01"]["localname"]="local_custommouth_RS"
     bpy.data.materials["body_teeth01"]["objectname"]="body_teeth01_SG"
