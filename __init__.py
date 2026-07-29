@@ -59,7 +59,7 @@ from .helper_vgroups import *
 from .g3f.importer_g3f_difeomorphic import *
 from .g3f.difeomorphic_workflow import *
 from .tools_import_export_vertex_groups_json import *
-from .tools_import_export_shape_keys_json import *
+from .legacy_tools_import_export_shape_keys_json import *
 from .tools_import_export_materials_json import *
 from .tools_import_export_edit_bones_json import *
 from .ik_tools import *
@@ -102,7 +102,7 @@ if "bpy" in locals():
     imp.reload(g3f.difeomorphic_workflow)
     imp.reload(g3f.difeomorphic_workflow_init_custom_vertex_indices)
     imp.reload(tools_import_export_vertex_groups_json)
-    imp.reload(tools_import_export_shape_keys_json)
+    imp.reload(legacy_tools_import_export_shape_keys_json)
     imp.reload(tools_import_export_materials_json)
     imp.reload(fbody_stats)
     imp.reload(ik_tools)
@@ -131,7 +131,7 @@ else:
     from .g3f import difeomorphic_workflow
     from .g3f import difeomorphic_workflow_init_custom_vertex_indices
     from . import tools_import_export_vertex_groups_json
-    from . import tools_import_export_shape_keys_json
+    from . import legacy_tools_import_export_shape_keys_json
     from . import tools_import_export_materials_json
     from . import fbody_stats 
     from . import ik_tools

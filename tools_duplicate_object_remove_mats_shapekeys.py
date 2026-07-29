@@ -15,10 +15,13 @@ def duplicate_object_keep_only_VG():
 		cloned_object.active_material_index = i
 		bpy.ops.object.material_slot_remove()
 
-	for i in reversed(range(len(cloned_object.data.shape_keys.key_blocks.keys()))):
-		print (i)
-		cloned_object.active_shape_key_index = i
-		bpy.ops.object.shape_key_remove()
+	# A converted VX body has no shape keys until they are imported from the custom json,
+	# and cloned_object.data.shape_keys is None in that case - guard rather than crash.
+	if cloned_object.data.shape_keys is not None:
+		for i in reversed(range(len(cloned_object.data.shape_keys.key_blocks.keys()))):
+			print (i)
+			cloned_object.active_shape_key_index = i
+			bpy.ops.object.shape_key_remove()
 
 	if cloned_object.name[-3:].isnumeric():
 		if cloned_object.name[-4:-3] == '.':

@@ -1,3 +1,24 @@
+"""
+LEGACY - superseded by the Game Mod Tiny Tools (GMTT) addon.
+
+Shape keys are now imported with GMTT, not from here. Every function in this module
+has ZERO call sites: no operator wraps them and nothing references them beyond the
+blanket `from .legacy_tools_import_export_shape_keys_json import *` in __init__.py.
+They are reachable only by typing the function name into the Python console.
+
+    exportShapeKeysToJsonFile(ob, filename)
+    importShapeKeysFromJsonFile(ob, filename)
+    add_empty_shapekeys_for_vx_body()
+
+Related legacy: the conversion in g3f/importer_g3f_difeomorphic.py used to create 14
+empty "bbb_*" placeholder shape keys plus a Basis. That block is commented out - the
+real shape keys come from the custom file via GMTT - which is why the guards below
+exist: a converted VX body now has ob.data.shape_keys == None.
+
+Do not build anything new on this module. Delete it once you are certain nothing in
+your workflow still reaches for these by hand.
+"""
+
 import bpy
 import json
 from mathutils import Vector
@@ -60,6 +81,12 @@ def exportShapeKeysToJsonFile(ob, filename):
     ob.update_from_editmode()
     #
     me = ob.data
+    # A converted VX body has no shape keys until they are imported from the custom json
+    # (the fake bbb_* placeholders are no longer created during conversion), so bail with
+    # a message instead of an AttributeError on shape_keys being None.
+    if ob.data.shape_keys is None or len(ob.data.shape_keys.key_blocks) == 0:
+        ShowMessageBox("'{}' has no shape keys to export.".format(ob.name), "Error", 'ERROR')
+        return
     basis_verts = ob.data.shape_keys.key_blocks[0]
 
     json_sk_exporter = "" #in properties it could be defined as  bbb_eye_L_morph,bbb_eye_R_morph,bbb_vagfix_morph

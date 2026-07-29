@@ -453,35 +453,46 @@ def convertG3FDifeomorphicToVXModFBody() :
     bpy.data.materials["body_main_censor"]["localname"]="local_customcensor_RS"
     bpy.data.materials["body_main_censor"]["objectname"]="body_main_censor_SG"
 
-    #add fake shapekeys
-
-    verts = ob.data.vertices
-
-    sk_basis = ob.shape_key_add('Basis')
-    ob.data.shape_keys.use_relative = True
-
-    shape_keys = [
-    'bbb_asian02_morph',
-    'bbb_vagfix_morph',
-    'bbb_eye_L_morph',
-    'bbb_asian01_morph',
-    'bbb_atomic01',
-    'bbb_hentai01_morph',
-    'bbb_eye_R_morph',
-    'bbb_african01_morph',
-    'bbb_vag_morph',
-    'bbb_jenna01_morph',
-    'bbb_capelli01_morph',
-    'bbb_ear01',
-    'bbb_pregnant',
-    'bbb_ear02'
-    ]
-
-    # Create 10 sequential deformations
-    for shape_key in shape_keys: 
-        # Create new shape key
-        sk = ob.shape_key_add(shape_key)
-        sk.slider_min = -1
+    # DISABLED - LEGACY. The 14 fake "bbb_*" shape keys plus a Basis were inherited from
+    # the pre-Difeomorphic importer (importer_g3f.py:309 still sets the same property).
+    # They carry no deltas; they only reserved names that dictionary_shapekeys.py maps to
+    # body_blends_* ids. The real shape keys are imported later from a custom file with
+    # the Game Mod Tiny Tools (GMTT) addon, which creates whatever it needs.
+    #
+    # Leaving them out means the converted mesh has NO shape keys at all, i.e.
+    # ob.data.shape_keys is None. Checked against every consumer in the addon:
+    #   safe   exporter_unreal.py:193-194  adds a Basis when one is missing
+    #   safe   exporter_unreal.py:1293     checks for None before reading key_blocks
+    #   fixed  legacy_tools_import_export_shape_keys_json.py  (dead module, now guarded)
+    #   fixed  tools_duplicate_object_remove_mats_shapekeys.py:18  (now guarded)
+    #
+    #verts = ob.data.vertices
+    #
+    #sk_basis = ob.shape_key_add('Basis')
+    #ob.data.shape_keys.use_relative = True
+    #
+    #shape_keys = [
+    #'bbb_asian02_morph',
+    #'bbb_vagfix_morph',
+    #'bbb_eye_L_morph',
+    #'bbb_asian01_morph',
+    #'bbb_atomic01',
+    #'bbb_hentai01_morph',
+    #'bbb_eye_R_morph',
+    #'bbb_african01_morph',
+    #'bbb_vag_morph',
+    #'bbb_jenna01_morph',
+    #'bbb_capelli01_morph',
+    #'bbb_ear01',
+    #'bbb_pregnant',
+    #'bbb_ear02'
+    #]
+    #
+    ## Create 10 sequential deformations
+    #for shape_key in shape_keys:
+    #    # Create new shape key
+    #    sk = ob.shape_key_add(shape_key)
+    #    sk.slider_min = -1
 
 
 
