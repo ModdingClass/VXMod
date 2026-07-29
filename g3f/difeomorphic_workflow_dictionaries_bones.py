@@ -267,3 +267,465 @@ toe_jointend_bones_parents = [
 ["small_toe4_end.R","small_toe4_joint02.R"],
 ]
 
+
+###############################################################################
+# Daz (Diffeomorphic) -> Manny, matching the DazToUnreal plugin exactly.
+#
+# Transcribed from DazToUnreal's ConvertToEpicSkeleton rename block
+# (DazToUnrealBlueprintUtils.cpp:165-261, the "// G3/G8/G8.1 Renaming" section),
+# then translated from Unreal's _l/_r suffix to this project's .L/.R convention.
+# 67 entries. Used by alignArmatureFromDifeomorphicToManny().
+#
+# Differences from the older `bones_matching` list above - deliberate, not oversights:
+#   * `hip` -> `spine_01`, so the spine runs abdomenLower->spine_02 .. chestUpper->spine_05.
+#     `bones_matching` instead maps pelvis->root and never fills spine_01.
+#   * `pelvis` is NOT renamed. It keeps its name and becomes the top-level bone.
+#     DazToUnreal parents it to a `root` bone; we do not create one, because the
+#     Blender FBX exporter turns the "Armature" object itself into the root bone.
+#   * Only ONE twist bone per joint is produced, because G3 only has one.
+#     thigh_twist_02, upperarm_twist_02 and lowerarm_twist_01 have no Daz source.
+#   * `lForearmTwist` maps to lowerarm_twist_*02*, not _01_ - see the note below.
+#
+# Bones with no entry here (lPectoral, lMetatarsals, lHeel, face rig, toes, tongue,
+# eyes, ...) keep their Daz names, exactly as DazToUnreal leaves them.
+###############################################################################
+dtu_manny_bones_matching = {
+    # Spine  (hip -> spine_01; pelvis keeps its name and becomes the top-level bone)
+    "hip": "spine_01",
+    "abdomenLower": "spine_02",
+    "abdomenUpper": "spine_03",
+    "chestLower": "spine_04",
+    "chestUpper": "spine_05",
+
+    # Neck
+    "neckLower": "neck_01",
+    "neckUpper": "neck_02",
+
+    # Legs
+    "lThighBend": "thigh.L",
+    "lShin": "calf.L",
+    "lFoot": "foot.L",
+    "lToe": "ball.L",
+    "rThighBend": "thigh.R",
+    "rShin": "calf.R",
+    "rFoot": "foot.R",
+    "rToe": "ball.R",
+
+    # Leg twists   - G3 has only ONE per side, so thigh_twist_02.L/R are NOT produced
+    "lThighTwist": "thigh_twist_01.L",
+    "rThighTwist": "thigh_twist_01.R",
+
+    # Arm twists   - G3 has only ONE per side, so upperarm_twist_02.L/R are NOT produced
+    "lShldrTwist": "upperarm_twist_01.L",
+    "rShldrTwist": "upperarm_twist_01.R",
+
+    # Forearm twists - DazToUnreal source comment: "The Lower Arm twists are swapped".
+    # The single Daz forearm twist fills Epic slot _02_, NOT _01_.
+    # lowerarm_twist_01.L/R are NOT produced.
+    "lForearmTwist": "lowerarm_twist_02.L",
+    "rForearmTwist": "lowerarm_twist_02.R",
+
+    # Arms
+    "lCollar": "clavicle.L",
+    "lShldrBend": "upperarm.L",
+    "lForearmBend": "lowerarm.L",
+    "lHand": "hand.L",
+    "rCollar": "clavicle.R",
+    "rShldrBend": "upperarm.R",
+    "rForearmBend": "lowerarm.R",
+    "rHand": "hand.R",
+
+    # Left hand   (Carpal numbering: 1=index, 2=middle, 3=ring, 4=pinky)
+    "lCarpal1": "index_metacarpal.L",
+    "lIndex1": "index_01.L",
+    "lIndex2": "index_02.L",
+    "lIndex3": "index_03.L",
+    "lCarpal2": "middle_metacarpal.L",
+    "lMid1": "middle_01.L",
+    "lMid2": "middle_02.L",
+    "lMid3": "middle_03.L",
+    "lCarpal3": "ring_metacarpal.L",
+    "lRing1": "ring_01.L",
+    "lRing2": "ring_02.L",
+    "lRing3": "ring_03.L",
+    "lCarpal4": "pinky_metacarpal.L",
+    "lPinky1": "pinky_01.L",
+    "lPinky2": "pinky_02.L",
+    "lPinky3": "pinky_03.L",
+    "lThumb1": "thumb_01.L",
+    "lThumb2": "thumb_02.L",
+    "lThumb3": "thumb_03.L",
+
+    # Right hand
+    "rCarpal1": "index_metacarpal.R",
+    "rIndex1": "index_01.R",
+    "rIndex2": "index_02.R",
+    "rIndex3": "index_03.R",
+    "rCarpal2": "middle_metacarpal.R",
+    "rMid1": "middle_01.R",
+    "rMid2": "middle_02.R",
+    "rMid3": "middle_03.R",
+    "rCarpal3": "ring_metacarpal.R",
+    "rRing1": "ring_01.R",
+    "rRing2": "ring_02.R",
+    "rRing3": "ring_03.R",
+    "rCarpal4": "pinky_metacarpal.R",
+    "rPinky1": "pinky_01.R",
+    "rPinky2": "pinky_02.R",
+    "rPinky3": "pinky_03.R",
+    "rThumb1": "thumb_01.R",
+    "rThumb2": "thumb_02.R",
+    "rThumb3": "thumb_03.R",
+}
+
+
+###############################################################################
+# Which child continues the chain, for bones that have more than one.
+#
+# Used by clampBoneLengthsToChildHeads() to decide what a bone's length is
+# allowed to reach. Without this, chestUpper -> spine_05 would be clamped against
+# lPectoral (which starts lower and nearer) instead of neck_01, leaving the
+# upper spine stubby.
+#
+# Bones with exactly ONE child do not need an entry - that child is used.
+# A value of None marks the bone as the end of its chain: its children exist
+# (face rig under head, toes under ball) but are not a continuation, so the bone
+# is left unclamped.
+#
+# Names are post-rename, i.e. Manny names for mapped bones and Daz names for the
+# ones carried over untouched (lMetatarsals is a real Daz bone between lFoot and
+# lToe, and is deliberately not renamed - Epic has no equivalent).
+###############################################################################
+manny_chain_successors = {
+    # --- spine / neck ---------------------------------------------------------
+    # Pinned end to end on purpose, not just where a bone is known to have
+    # several children. Anything can end up parented into the torso - pectorals,
+    # collars, breast helpers, clothing and prop bones - and a single unexpected
+    # child is enough to push a spine bone down the "several children, no entry"
+    # branch, where it is left UNCLAMPED and renders far too long. Pinning the
+    # whole chain makes the clamp target independent of what else hangs off it.
+    "pelvis": "spine_01",          # also parents thigh.L / thigh.R
+    "spine_01": "spine_02",
+    "spine_02": "spine_03",
+    "spine_03": "spine_04",
+    "spine_04": "spine_05",        # chestLower -> chestUpper
+    "spine_05": "neck_01",         # also parents clavicle.L/R and lPectoral/rPectoral
+    "neck_01": "neck_02",
+    "neck_02": "head",
+    "head": None,                  # face rig / eyes / jaw are not a continuation
+
+    # --- hands / feet ---------------------------------------------------------
+    "hand.L": "middle_metacarpal.L",   # middle finger is the natural extension
+    "hand.R": "middle_metacarpal.R",
+    # A list is tried in order, first match wins. The foot is clamped twice: once when
+    # the armature is built, while Daz's lMetatarsals is still in the chain, and again
+    # after mergeBonesIntoTargets removes it and reparents ball onto foot.
+    "foot.L": ["lMetatarsals", "ball.L"],
+    "foot.R": ["rMetatarsals", "ball.R"],
+    "ball.L": None,                # toes are not a continuation
+    "ball.R": None,
+
+    # --- limbs ----------------------------------------------------------------
+    # Two candidates each, and the ORDER matters. The clamp runs three times: when
+    # the armature is built and after the collapse, while Daz still has the twist
+    # in-chain, and again after setupTwistBones makes the twists leaves. Listing
+    # the joint bone first means it wins as soon as it becomes a direct child, and
+    # the twist is only used as the fallback beforehand.
+    "thigh.L": ["calf.L", "thigh_twist_01.L"],
+    "thigh.R": ["calf.R", "thigh_twist_01.R"],
+    "calf.L": "foot.L",
+    "calf.R": "foot.R",
+    "upperarm.L": ["lowerarm.L", "upperarm_twist_01.L"],
+    "upperarm.R": ["lowerarm.R", "upperarm_twist_01.R"],
+    "lowerarm.L": ["hand.L", "lowerarm_twist_02.L"],
+    "lowerarm.R": ["hand.R", "lowerarm_twist_02.R"],
+}
+
+
+###############################################################################
+# Non-Manny bones that are KEPT in the VX body, renamed to the VXMod convention.
+#
+# The Epic mannequin has no toe or breast bones, so DazToUnreal leaves these under
+# their Daz names. VXMod wants them, under the <part>_joint<NN>.<side> convention
+# already used by toe_bones_matching and breast_weights_matching.
+#
+# Kept separate from dtu_manny_bones_matching on purpose: that table is a pure
+# transcription of the DazToUnreal plugin and should stay verifiable against it.
+# Both are merged at use time by getMannyBoneRenameMap().
+#
+# The face rig is NOT here - it is collapsed into head / lowerJaw instead, see
+# face_collapse_rules below.
+###############################################################################
+manny_extra_bones_matching = {
+    # Breasts
+    "lPectoral": "breast_joint.L",
+    "rPectoral": "breast_joint.R",
+
+    # Toes - left
+    "lBigToe": "big_toe_joint01.L",
+    "lBigToe_2": "big_toe_joint02.L",
+    "lSmallToe1": "small_toe1_joint01.L",
+    "lSmallToe1_2": "small_toe1_joint02.L",
+    "lSmallToe2": "small_toe2_joint01.L",
+    "lSmallToe2_2": "small_toe2_joint02.L",
+    "lSmallToe3": "small_toe3_joint01.L",
+    "lSmallToe3_2": "small_toe3_joint02.L",
+    "lSmallToe4": "small_toe4_joint01.L",
+    "lSmallToe4_2": "small_toe4_joint02.L",
+
+    # Toes - right
+    "rBigToe": "big_toe_joint01.R",
+    "rBigToe_2": "big_toe_joint02.R",
+    "rSmallToe1": "small_toe1_joint01.R",
+    "rSmallToe1_2": "small_toe1_joint02.R",
+    "rSmallToe2": "small_toe2_joint01.R",
+    "rSmallToe2_2": "small_toe2_joint02.R",
+    "rSmallToe3": "small_toe3_joint01.R",
+    "rSmallToe3_2": "small_toe3_joint02.R",
+    "rSmallToe4": "small_toe4_joint01.R",
+    "rSmallToe4_2": "small_toe4_joint02.R",
+}
+
+
+###############################################################################
+# Bone-count reduction: the face rig, folded into head and lowerJaw.
+#
+# EXPLICIT lists rather than a runtime subtree walk, so exactly which bones get
+# collapsed is visible here and can be edited without reasoning about hierarchy.
+# Move a name out of a list and it survives as its own deform bone.
+#
+# Generated from the real Diffeomorphic G3F rig
+# (custom_json_files/diffeomorphic_g3f/diffeomorphic_g3f.json, 172 bones) and
+# verified to be exactly the upperFaceRig / lowerFaceRig subtrees.
+#
+# Hierarchy, for reference:
+#   head -> upperFaceRig (46 children)   -> merged into head
+#   head -> lowerJaw -> lowerFaceRig (18 children) -> merged into lowerJaw
+#
+# NOT in these lists, and therefore KEPT as deform bones - they hang off head and
+# lowerJaw directly, not off the face rigs:
+#   lEye, rEye, lEar, rEar, upperTeeth        (children of head)
+#   lowerTeeth -> tongue01 -> .. -> tongue04  (children of lowerJaw)
+#
+# Names are Daz names: this runs BEFORE the Daz -> Manny vertex-group rename.
+# Both targets survive that rename untouched - `head` maps to itself, `lowerJaw`
+# is in no rename table.
+#
+# 47 + 19 = 66 bones removed, taking the rig from 172 to 106.
+###############################################################################
+
+# 47 bones -> head
+face_bones_merged_to_head = [
+    # rig root
+    "upperFaceRig",
+
+    # brows
+    "CenterBrow", "lBrowInner", "lBrowMid", "lBrowOuter", "rBrowInner", "rBrowMid",
+    "rBrowOuter",
+
+    # eyelids
+    "lEyelidInner", "lEyelidLower", "lEyelidLowerInner", "lEyelidLowerOuter",
+    "lEyelidOuter", "lEyelidUpper", "lEyelidUpperInner", "lEyelidUpperOuter",
+    "rEyelidInner", "rEyelidLower", "rEyelidLowerInner", "rEyelidLowerOuter",
+    "rEyelidOuter", "rEyelidUpper", "rEyelidUpperInner", "rEyelidUpperOuter",
+
+    # squints
+    "lSquintInner", "lSquintOuter", "rSquintInner", "rSquintOuter",
+
+    # cheeks
+    "lCheekUpper", "rCheekUpper",
+
+    # nose / nostrils
+    "MidNoseBridge", "Nose", "lNostril", "rNostril",
+
+    # upper lip
+    "LipUpperMiddle", "lLipBelowNose", "lLipUpperInner", "lLipUpperOuter", "rLipBelowNose",
+    "rLipUpperInner", "rLipUpperOuter",
+
+    # nasolabial
+    "lLipNasolabialCrease", "lNasolabialMiddle", "lNasolabialUpper", "rLipNasolabialCrease",
+    "rNasolabialMiddle", "rNasolabialUpper",
+]
+
+# 19 bones -> lowerJaw
+face_bones_merged_to_lower_jaw = [
+    # rig root
+    "lowerFaceRig",
+
+    # cheeks
+    "lCheekLower", "rCheekLower",
+
+    # jaw / chin
+    "BelowJaw", "Chin", "lJawClench", "rJawClench",
+
+    # lower lip
+    "LipBelow", "LipLowerMiddle", "lLipCorner", "lLipLowerInner", "lLipLowerOuter",
+    "rLipCorner", "rLipLowerInner", "rLipLowerOuter",
+
+    # nasolabial
+    "lNasolabialLower", "lNasolabialMouthCorner", "rNasolabialLower",
+    "rNasolabialMouthCorner",
+]
+
+###############################################################################
+# Foot: Manny has ball_l as a DIRECT child of foot_l. Daz puts lMetatarsals in
+# between (lFoot -> lMetatarsals -> lToe) and hangs lHeel off lFoot as well.
+#
+# Leaving lMetatarsals in the chain would make the rig Manny-incompatible, so its
+# weight is folded into the foot and the bone is removed; mergeBonesIntoTargets then
+# reparents ball.L onto foot.L.
+#
+# NOTE the mixed naming below, it is not a mistake. The collapse runs AFTER both the
+# bone rename (done by alignArmatureFromDifeomorphicToManny) and the vertex-group
+# rename, so mapped bones are already Manny-named - hence foot.L, not lFoot. Bones
+# with no Manny equivalent (the whole face rig, lHeel, lMetatarsals, head, lowerJaw)
+# were never renamed and so still carry Daz names.
+###############################################################################
+foot_bones_merged_to_left_foot = ["lHeel", "lMetatarsals"]
+foot_bones_merged_to_right_foot = ["rHeel", "rMetatarsals"]
+
+
+# {target bone: [bones whose weights are folded into it and are then deleted]}
+# All bone/weight merging for the conversion lives here - switchVertexGroupsToManny
+# is a pure 1:1 rename and does no merging of its own.
+bone_collapse_rules = {
+    "head": face_bones_merged_to_head,              # unmapped, keeps its Daz name
+    "lowerJaw": face_bones_merged_to_lower_jaw,     # unmapped, keeps its Daz name
+    "foot.L": foot_bones_merged_to_left_foot,       # renamed from lFoot in step 1
+    "foot.R": foot_bones_merged_to_right_foot,      # renamed from rFoot in step 1
+}
+
+
+###############################################################################
+# Parenting fixes applied after a collapse, {new parent: [children to move]}.
+#
+# When a bone is deleted its orphans go to the nearest surviving ancestor, which
+# is right for most things but wrong for the toes. Daz hangs lToe AND all five
+# toes off lMetatarsals as siblings:
+#
+#     lFoot -> lMetatarsals -> lToe
+#                           -> lBigToe -> lBigToe_2
+#                           -> lSmallToe1..4 -> ..._2
+#
+# so deleting lMetatarsals would drop the toes onto foot.L next to ball.L.
+# Anatomically, and in every game rig, the toes belong UNDER the ball.
+#
+# Post-rename names, since this runs after the collapse. The _2 tip bones are not
+# listed: they are children of the joint01 bones and move along with them.
+###############################################################################
+bone_reparent_overrides = {
+    "ball.L": [
+        "big_toe_joint01.L",
+        "small_toe1_joint01.L", "small_toe2_joint01.L",
+        "small_toe3_joint01.L", "small_toe4_joint01.L",
+    ],
+    "ball.R": [
+        "big_toe_joint01.R",
+        "small_toe1_joint01.R", "small_toe2_joint01.R",
+        "small_toe3_joint01.R", "small_toe4_joint01.R",
+    ],
+}
+
+
+###############################################################################
+# Twist bones.
+#
+# Daz gives one twist per joint and chains it IN-LINE:
+#     lShldrBend -> lShldrTwist -> lForearmBend -> lForearmTwist -> lHand
+# Manny gives TWO per joint and hangs them off the parent as LEAVES:
+#     upperarm_l -> lowerarm_l
+#                -> upperarm_twist_01_l, upperarm_twist_02_l
+#
+# setupTwistBones fixes both differences. Taking the twists out of the chain is
+# the same operation DazToUnreal does in FixTwistBones (DazToUnrealFbx.cpp:174),
+# which it forces on for any Convert-To-Epic run.
+#
+# Placement: the twists are spaced along the parent at 1/3 and 2/3, each one a
+# third of the parent long, roll copied from the parent.
+#
+# Ordering is _01 then _02 down the limb, except the calf, which is deliberately
+# reversed:
+#   thigh    _01 @ 1/3 (hip end)     _02 @ 2/3 (knee end)
+#   calf     _01 @ 2/3 (ankle end)   _02 @ 1/3 (knee end)   <- reversed
+#   upperarm _01 @ 1/3 (shoulder)    _02 @ 2/3 (elbow)
+#   lowerarm _01 @ 2/3 (wrist end)   _02 @ 1/3 (elbow end)  <- reversed
+# The two distal segments are reversed: their twist is driven from the far joint
+# (ankle, wrist), so _01 sits at that end. Swap a pair's fractions to flip it.
+#
+# NOTE this does not match armature_vxnew_manny.json, which parks both twins at
+# 50% with half the parent's length. These spaced positions were specified later
+# and supersede it.
+#
+# Daz has NO shin twist - not in G3, G8 or G9, and DazToUnreal has no calf_twist
+# mapping for any of them (it inherits those bones from Quinn, weightless). So
+# calf_twist_01/02 have no source weights here either and start empty.
+#
+# (parent, [(twist name, head fraction along parent), ...], length fraction)
+###############################################################################
+twist_bone_pairs = [
+    ("thigh.L",    [("thigh_twist_01.L", 1.0/3.0), ("thigh_twist_02.L", 2.0/3.0)], 1.0/3.0),
+    ("thigh.R",    [("thigh_twist_01.R", 1.0/3.0), ("thigh_twist_02.R", 2.0/3.0)], 1.0/3.0),
+    ("calf.L",     [("calf_twist_01.L", 2.0/3.0), ("calf_twist_02.L", 1.0/3.0)], 1.0/3.0),
+    ("calf.R",     [("calf_twist_01.R", 2.0/3.0), ("calf_twist_02.R", 1.0/3.0)], 1.0/3.0),
+    ("upperarm.L", [("upperarm_twist_01.L", 1.0/3.0), ("upperarm_twist_02.L", 2.0/3.0)], 1.0/3.0),
+    ("upperarm.R", [("upperarm_twist_01.R", 1.0/3.0), ("upperarm_twist_02.R", 2.0/3.0)], 1.0/3.0),
+    ("lowerarm.L", [("lowerarm_twist_01.L", 2.0/3.0), ("lowerarm_twist_02.L", 1.0/3.0)], 1.0/3.0),
+    ("lowerarm.R", [("lowerarm_twist_01.R", 2.0/3.0), ("lowerarm_twist_02.R", 1.0/3.0)], 1.0/3.0),
+]
+
+
+###############################################################################
+# Bones whose length is set EXACTLY to the distance to their chain successor,
+# rather than merely being capped at it by clampBoneLengthsToChildHeads.
+#
+# Daz's tails stop short of where the next joint begins, so a cap alone leaves
+# these short. Direction and roll are preserved; only the tail slides along the
+# existing axis.
+#
+#   foot     -> should reach the ball
+#   thigh    -> should reach the shin/calf head
+#   calf     -> should reach the foot head
+#   upperarm -> should reach the lowerarm head
+#   lowerarm -> should reach the hand head
+#
+# Measured on the real G3F rig, every one of these is SHORT, not long, so the cap
+# alone would never fire: thigh/upperarm/lowerarm/foot fall ~53% short of the next
+# joint and the calf ~4%.
+#
+# The twist fractions are measured off these lengths, so setupTwistBones settles
+# them (step 2) before placing anything (step 3). The calf matters here even at 4%:
+# a short calf pushes calf_twist_01/02 about 1.3 cm up the shin, away from the ankle.
+###############################################################################
+bones_length_set_to_successor = [
+    "foot.L", "foot.R",
+    "thigh.L", "thigh.R",
+    "calf.L", "calf.R",
+    "upperarm.L", "upperarm.R",
+    "lowerarm.L", "lowerarm.R",
+]
+
+
+###############################################################################
+# Bones that must survive the collapse. Asserted at run time so a careless edit
+# to the lists above cannot quietly delete something the later pipeline needs.
+###############################################################################
+bones_that_must_be_kept = [
+    "lEye", "rEye", "lEar", "rEar",
+    "upperTeeth", "lowerTeeth",
+    "tongue01", "tongue02", "tongue03", "tongue04",
+]
+
+
+def getMannyBoneRenameMap():
+    """
+    The single source of truth for Daz -> Manny naming.
+
+    Both the armature builder and the vertex-group renamer call this, so bone names
+    and vertex-group names cannot drift apart. (They already had: the old
+    spine_weights_matching table was off by one against dtu_manny_bones_matching -
+    abdomenLower -> spine_01 as a group but spine_02 as a bone.)
+    """
+    combined = dict(dtu_manny_bones_matching)
+    combined.update(manny_extra_bones_matching)
+    return combined
+

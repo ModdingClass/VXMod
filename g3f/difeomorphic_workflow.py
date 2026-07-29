@@ -28,6 +28,948 @@ if "bpy" in locals():
 else:
     from ..g3f import difeomorphic_workflow_dictionaries_bones as dict_bones
 
+def alignArmatureFromDifeomorphicToManny():
+    """
+    Build a Manny-named armature named "Armature" from the selected
+    Diffeomorphic-imported G3F armature.
+
+    Mirrors what the DazToUnreal plugin's ConvertToEpicSkeleton does, minus the
+    re-orientation pass (see reorientArmatureFromDifeomorphicToManny below).
+
+    What it does
+      1. Refuses to run if an object called "Armature" already exists.
+      2. Copies EVERY bone of the source rig, head/tail/roll unchanged.
+      3. Renames via dict_bones.getMannyBoneRenameMap() - the 67 DazToUnreal names
+         plus the 22 extras VXMod keeps (toes, breasts). Bones with no entry
+         (lMetatarsals, lHeel, the face rig, tongue, eyes, ...) are carried over
+         under their Daz names, exactly as DazToUnreal leaves them. Nothing is
+         dropped here; the face rig is collapsed later by mergeBonesIntoTargets.
+      4. Rebuilds the parenting, then applies DazToUnreal's one hierarchy change:
+         pelvis becomes top-level and spine_01 (was hip) becomes its child.
+      5. Applies the two DazToUnreal re-positionings (pelvis drop, spine_01 midpoint).
+      6. Clamps every bone's length so it never overshoots its nearest child's head
+         (see clampBoneLengthsToChildHeads).
+
+    No `root` bone is created: the Blender FBX exporter promotes the "Armature"
+    object itself to the root bone, so a root bone here would be a duplicate.
+
+    Re-positioning is applied as a PURE TRANSLATION - head and tail move together,
+    so bone direction, length and roll are untouched. Orientation is the separate
+    pass that is deliberately not implemented yet.
+
+    Note: this only builds the armature. The G3F mesh is still bound to the
+    Diffeomorphic rig and its vertex groups still carry Daz names; re-binding and
+    vertex-group renaming are separate steps.
+    """
+    ZERO_LENGTH_EPS = 1e-6
+
+    # ------------------------------------------------------------------ guards
+    if "Armature" in bpy.data.objects:
+        msg = "An object named 'Armature' already exists. Delete or rename it first."
+        print(msg)
+        ShowMessageBox(msg, "Warning", 'INFO')
+        return {'CANCELLED'}
+
+    source_armature = bpy.context.scene.objects.active
+    if source_armature is None or source_armature.type != 'ARMATURE':
+        msg = "Difeomorphic Armature must be selected"
+        print(msg)
+        ShowMessageBox(msg, "Warning", 'INFO')
+        return {'CANCELLED'}
+
+    if source_armature.get("DazRig") is None or source_armature["DazRig"] != "genesis3":
+        msg = "Difeomorphic Armature must be selected (DazRig == 'genesis3')"
+        print(msg)
+        ShowMessageBox(msg, "Warning", 'INFO')
+        return {'CANCELLED'}
+
+    # -------------------------------------------------- cache the source bones
+    bpy.ops.object.mode_set(mode='OBJECT')
+    bpy.ops.object.select_all(action='DESELECT')
+    source_armature.select = True
+    bpy.context.scene.objects.active = source_armature
+    bpy.ops.object.mode_set(mode='EDIT')
+    cachedBonesData = cacheEditBonesData(source_armature)
+    bpy.ops.object.mode_set(mode='OBJECT')
+
+    print("alignArmatureFromDifeomorphicToManny: cached {} source bones from '{}'"
+          .format(len(cachedBonesData), source_armature.name))
+
+    # --------------------------------------- create the target armature object
+    # Created at the origin on purpose: the "Armature" object becomes the root
+    # bone on FBX export, and Epic expects root at the origin.
+    vx_armature_data = bpy.data.armatures.new("Armature")
+    vx_armature = bpy.data.objects.new("Armature", vx_armature_data)
+    bpy.context.scene.objects.link(vx_armature)
+    vx_armature.location = (0.0, 0.0, 0.0)
+    bpy.context.scene.update()
+
+    if vx_armature.name != "Armature":
+        # Blender uniquified the name, so something still holds it. Back out
+        # rather than silently producing "Armature.001", which would not be
+        # promoted to the root bone on export.
+        msg = ("Could not create an object named exactly 'Armature' "
+               "(Blender produced '{}'). Aborting.".format(vx_armature.name))
+        print(msg)
+        bpy.data.objects.remove(vx_armature)
+        ShowMessageBox(msg, "Warning", 'INFO')
+        return {'CANCELLED'}
+
+    bpy.ops.object.select_all(action='DESELECT')
+    vx_armature.select = True
+    bpy.context.scene.objects.active = vx_armature
+    bpy.ops.object.mode_set(mode='EDIT')
+    ebones = vx_armature_data.edit_bones
+
+    # ------------------------------------------------- create + rename the bones
+    rename_map = dict_bones.getMannyBoneRenameMap()
+    created = {}              # source bone name -> new bone name
+    skipped_zero_length = []
+    name_collisions = []
+
+    for source_name, bone_data in cachedBonesData.items():
+        head = bone_data["head"]
+        tail = bone_data["tail"]
+        if (tail - head).length < ZERO_LENGTH_EPS:
+            # Blender silently deletes zero-length bones, so skip them loudly.
+            skipped_zero_length.append(source_name)
+            continue
+
+        target_name = rename_map.get(source_name, source_name)
+        eb = ebones.new(target_name)
+        eb.head = head
+        eb.tail = tail
+        eb.roll = bone_data["roll"]
+        # Never connect: connected children are forced to follow the parent tail,
+        # which would break the pure-translation re-positioning below.
+        eb.use_connect = False
+
+        if eb.name != target_name:
+            name_collisions.append((source_name, target_name, eb.name))
+        created[source_name] = eb.name
+
+    # ----------------------------------------------------- rebuild the parenting
+    for source_name, target_name in created.items():
+        source_parent = cachedBonesData[source_name]["parent"]
+        # Walk up past anything that was skipped so the chain stays connected.
+        while source_parent is not None and source_parent not in created:
+            source_parent = cachedBonesData[source_parent]["parent"]
+        if source_parent is None:
+            ebones[target_name].parent = None
+        else:
+            ebones[target_name].parent = ebones[created[source_parent]]
+
+    # ------------------------------------- DazToUnreal's hierarchy change
+    # DazToUnrealBlueprintUtils.cpp:157-159 does:
+    #     ParentBone("pelvis", "root");  ParentBone("hip", "pelvis");
+    # With no root bone, "pelvis" simply becomes top-level.
+    if "pelvis" in ebones:
+        ebones["pelvis"].parent = None
+    if "spine_01" in ebones and "pelvis" in ebones:
+        ebones["spine_01"].parent = ebones["pelvis"]
+
+    # ------------------------------------------------------- re-positioning
+    # Applied as pure translations (head and tail move by the same delta) so that
+    # bone direction, length and roll survive untouched.
+
+    # DazToUnreal op 3 - drop the pelvis 70% of the way toward the thighs.
+    #   adj = (pelvis.z - thigh_l.z) * 0.7 ; pelvis.location += (0,0,-adj)
+    if "pelvis" in ebones and "thigh.L" in ebones:
+        pelvis_drop = (ebones["pelvis"].head.z - ebones["thigh.L"].head.z) * 0.7
+        delta = Vector((0.0, 0.0, -pelvis_drop))
+        ebones["pelvis"].head = ebones["pelvis"].head + delta
+        ebones["pelvis"].tail = ebones["pelvis"].tail + delta
+        print("  pelvis lowered by {:.6f}".format(pelvis_drop))
+    else:
+        print("  WARNING: pelvis / thigh.L missing - pelvis drop skipped")
+
+    # DazToUnreal op 4 - place spine_01 between pelvis and spine_02.
+    #
+    # DazToUnreal writes a LOCAL translation of (rel.z, rel.y, 0), where
+    #     rel = (spine_02.global - pelvis.global) * 0.5
+    # inside the pelvis frame that op 2 has rotated by (90,-90,-90). Rather than
+    # replicate that frame - it belongs to the re-orientation pass, which is not
+    # implemented - the head is computed DIRECTLY in global space, one axis at a
+    # time. Blender axes: X = side, Y = forward/back, Z = up.
+    #
+    #   X (side)    the figure's centreline, ~0 on a centred G3F. Taken from the
+    #               pelvis rather than hardcoded to 0.0, so an off-centre or
+    #               posed rig stays on its own centreline instead of being
+    #               yanked to the world origin.
+    #   Y (forward) taken from the pelvis. DazToUnreal writes 0 into the third
+    #               component, i.e. no forward offset from the parent, so
+    #               spine_01 stays level with the pelvis front-to-back rather
+    #               than drifting toward spine_02.
+    #   Z (up)      half way between pelvis and spine_02 - the "* 0.5" above.
+    #
+    # If spine_01 ends up sitting too far back on a real figure, the Y line is
+    # the one to change; the alternative reading is the plain midpoint:
+    #     (pelvis_head.y + spine_02_head.y) / 2.0
+    if "spine_01" in ebones and "pelvis" in ebones and "spine_02" in ebones:
+        pelvis_head = ebones["pelvis"].head.copy()
+        spine_02_head = ebones["spine_02"].head.copy()
+        new_head = Vector((
+            pelvis_head.x,
+            pelvis_head.y,
+            (pelvis_head.z + spine_02_head.z) / 2.0,
+        ))
+        # Tail follows by the same delta so direction, length and roll survive;
+        # the length clamp below then pulls the tail in to reach spine_02.
+        delta = new_head - ebones["spine_01"].head
+        ebones["spine_01"].head = new_head
+        ebones["spine_01"].tail = ebones["spine_01"].tail + delta
+        print("  spine_01 head set to {} (moved by {})".format(new_head, delta))
+    else:
+        print("  WARNING: spine_01 / pelvis / spine_02 missing - spine_01 move skipped")
+
+    # ------------------------------------------------------- clamp bone lengths
+    # Must run LAST: the two re-positionings above move heads without moving the
+    # children, which changes the head-to-child-head distances this depends on.
+    clamped = clampBoneLengthsToChildHeads(vx_armature)
+
+    bpy.ops.object.mode_set(mode='OBJECT')
+
+    # ------------------------------------------------------------------ report
+    renamed_count = sum(1 for n in created if n in rename_map)
+    carried_count = len(created) - renamed_count
+    print("alignArmatureFromDifeomorphicToManny: created {} bones "
+          "({} renamed to Manny, {} carried over with Daz names)"
+          .format(len(created), renamed_count, carried_count))
+
+    unmatched = [n for n in rename_map if n not in cachedBonesData]
+    if unmatched:
+        print("  WARNING: {} mapping entries had no source bone: {}"
+              .format(len(unmatched), sorted(unmatched)))
+    if skipped_zero_length:
+        print("  WARNING: skipped {} zero-length bones: {}"
+              .format(len(skipped_zero_length), sorted(skipped_zero_length)))
+    if name_collisions:
+        print("  WARNING: {} name collisions (Blender uniquified): {}"
+              .format(len(name_collisions), name_collisions))
+    if clamped:
+        print("  clamped {} bone lengths to their nearest child head:".format(len(clamped)))
+        for bone_name, was, now in clamped:
+            print("      {:<24} {:.6f} -> {:.6f}".format(bone_name, was, now))
+
+    return {'FINISHED'}
+
+
+def clampBoneLengthsToChildHeads(vx_armature, min_length=1e-5):
+    """
+    Shorten any bone that overshoots its children, so that
+
+        bone.length <= distance(bone.head, nearest child head)
+
+    Daz bone tails routinely reach past where the next joint starts, and the two
+    re-positionings in alignArmatureFromDifeomorphicToManny make it worse - moving
+    spine_01's head to the pelvis/spine_02 midpoint roughly halves the distance to
+    its child while leaving its tail where it was.
+
+    The bone is shortened ALONG ITS EXISTING DIRECTION, so head position, direction
+    and roll are all preserved - only the tail slides in. That keeps this consistent
+    with the rest of the function, which deliberately does not re-orient anything.
+
+    Bones are only ever shortened, never extended: the rule is an upper bound.
+
+    Which child counts: only the ONE that logically continues the chain, never
+    just the nearest. chestUpper -> spine_05 parents lPectoral and the clavicles
+    as well as neck_01, and lPectoral starts lower and nearer - clamping against
+    it would leave the upper spine stubby. Selection order:
+
+      1. exactly one child        -> that child
+      2. dict_bones.manny_chain_successors has an entry -> that child
+         (a None entry marks the bone as the end of its chain: head, ball.L/R)
+      3. several children, no entry -> NOT clamped. Warned about if the bone is
+         Manny-named, silent for carried-over Daz bones (face rig and friends,
+         which are not part of the Manny chain and are nobody's business here).
+
+    Leaf bones are left alone (no children, no constraint). A bone whose chain
+    child sits on top of its own head is also left alone rather than being reduced
+    to zero length, which Blender would delete.
+
+    The armature must already be in EDIT mode.
+
+    Returns a list of (bone_name, old_length, new_length) for whatever was changed.
+    """
+    ebones = vx_armature.data.edit_bones
+    successors = dict_bones.manny_chain_successors
+    snap_to_successor = set(getattr(dict_bones, "bones_length_set_to_successor", []))
+    manny_names = set(dict_bones.getMannyBoneRenameMap().values())
+    manny_names.add("pelvis")
+
+    # Build the children map from .parent rather than using EditBone.children,
+    # which is not reliably exposed in the 2.79 API.
+    children_map = {}
+    for eb in ebones:
+        if eb.parent is not None:
+            children_map.setdefault(eb.parent.name, []).append(eb.name)
+
+    clamped = []
+    unresolved = []
+    for bone_name, child_names in sorted(children_map.items()):
+        eb = ebones[bone_name]
+
+        if bone_name in successors:
+            candidates = successors[bone_name]
+            if candidates is None:
+                continue                        # end of chain, deliberately unclamped
+            if isinstance(candidates, str):
+                candidates = [candidates]
+            # First candidate that is actually a child wins, so one entry can cover both
+            # sides of a collapse (foot.L -> lMetatarsals before it, ball.L after).
+            chain_child = None
+            for candidate in candidates:
+                if candidate in child_names:
+                    chain_child = candidate
+                    break
+            if chain_child is None:
+                print("  WARNING: none of '{}' successors {} are children of it "
+                      "{} - not clamped".format(bone_name, candidates, sorted(child_names)))
+                continue
+        elif len(child_names) == 1:
+            chain_child = child_names[0]
+        else:
+            if bone_name in manny_names:
+                unresolved.append((bone_name, sorted(child_names)))
+            continue
+
+        max_length = (ebones[chain_child].head - eb.head).length
+        if max_length < min_length:
+            print("  WARNING: '{}' chain child '{}' head is {:.9f} away - not clamped"
+                  .format(bone_name, chain_child, max_length))
+            continue
+
+        current_length = eb.length
+        if bone_name in snap_to_successor:
+            # Set the length EXACTLY, extending as well as shortening. The foot needs
+            # this: Daz's lFoot tail stops short of where the ball begins, so capping
+            # alone would leave it short of ball.L.
+            if abs(current_length - max_length) > min_length:
+                direction = (eb.tail - eb.head).normalized()
+                eb.tail = eb.head + direction * max_length
+                clamped.append((bone_name, current_length, max_length))
+        elif current_length > max_length:
+            direction = (eb.tail - eb.head).normalized()
+            eb.tail = eb.head + direction * max_length
+            clamped.append((bone_name, current_length, max_length))
+
+    if unresolved:
+        print("  WARNING: {} Manny bone(s) have several children and no "
+              "manny_chain_successors entry - left unclamped:".format(len(unresolved)))
+        for bone_name, child_names in unresolved:
+            print("      {:<24} children: {}".format(bone_name, child_names))
+
+    return clamped
+
+
+def findDiffeomorphicArmature():
+    """
+    Locate the Diffeomorphic G3F armature in the scene without relying on the selection.
+
+    Matches on the DazRig property that the import_daz addon writes, which is the same
+    test alignArmatureFromDifeomorphicToManny does on the active object - so anything this
+    finds will pass that guard.
+
+    The already-converted "Armature" is skipped, so re-running after a partial conversion
+    finds the source rig rather than the output.
+
+    Returns (armature_object, error_message). Exactly one of the two is None.
+    """
+    candidates = []
+    for ob in bpy.context.scene.objects:
+        if ob.type != 'ARMATURE' or ob.name == "Armature":
+            continue
+        if ob.get("DazRig") == "genesis3":
+            candidates.append(ob)
+
+    if not candidates:
+        return (None, "No Difeomorphic G3F armature in the scene "
+                      "(looked for an ARMATURE with DazRig == 'genesis3').")
+    if len(candidates) > 1:
+        return (None, "Found {} Difeomorphic G3F armatures ({}). Delete or rename the "
+                      "ones you are not converting.".format(
+                          len(candidates), ", ".join(sorted(ob.name for ob in candidates))))
+    return (candidates[0], None)
+
+
+def findConvertedBodyMesh(preferred_name=""):
+    """
+    Locate the mesh produced by the G3F -> VX body conversion.
+
+    body_subdiv_cage is the canonical name importer_g3f_difeomorphic.py:419 gives it, so
+    it is tried first and the panel's mesh selector is only a fallback - the selector
+    auto-follows the active object, which makes it an unreliable primary source.
+
+    Returns (mesh_object, error_message). Exactly one of the two is None.
+    """
+    mesh = bpy.data.objects.get("body_subdiv_cage")
+    if mesh is not None and mesh.type == 'MESH':
+        return (mesh, None)
+
+    if preferred_name and preferred_name in bpy.data.objects:
+        mesh = bpy.data.objects[preferred_name]
+        if mesh.type == 'MESH':
+            print("findConvertedBodyMesh: no 'body_subdiv_cage', using the selector's "
+                  "'{}'".format(mesh.name))
+            return (mesh, None)
+
+    return (None, "No converted body mesh found. Run 'G3F->VX body' first, or pick the "
+                  "mesh in the VXMod mesh selector.")
+
+
+def bindMeshToArmature(mesh_object, armature_object, modifier_name="Armature"):
+    """
+    Give a mesh an ARMATURE modifier pointing at an armature.
+
+    The mesh is deliberately NOT parented to the armature - only the modifier is linked.
+    body_subdiv_cage stays a top-level object. The exporter builds its own hierarchy at
+    export time (exporter_unreal.py:1486 parents the LOD group under the armature clone),
+    so parenting the source mesh here would only get in the way.
+
+    Nothing else in this addon does even this much. The G3F -> VX body conversion detaches
+    the body clone (importer_g3f_difeomorphic.py:83 sets parent = None) and never links an
+    armature, so it has been a manual step. The exporter only CHECKS the modifier exists
+    (exporter_unreal.py:421 aborts with "Object ... has no armature!"), and the panel label
+    at __init__.py:392 switches between "Export SM_" and "Export SKM_" on it.
+
+    The modifier is created explicitly rather than through
+    bpy.ops.object.parent_set(type='ARMATURE_NAME') - that operator would parent the mesh,
+    which is exactly what we do not want, and its result depends on the current selection.
+
+    Re-running is safe: an existing ARMATURE modifier is retargeted instead of a second one
+    being added, and a parent left over from an earlier run is cleared.
+
+    Returns the modifier, or None if the arguments were wrong.
+    """
+    if mesh_object is None or mesh_object.type != 'MESH':
+        print("bindMeshToArmature: first argument must be a mesh.")
+        return None
+    if armature_object is None or armature_object.type != 'ARMATURE':
+        print("bindMeshToArmature: second argument must be an armature.")
+        return None
+
+    modifier = None
+    for mod in mesh_object.modifiers:
+        if mod.type == 'ARMATURE':
+            modifier = mod
+            break
+
+    if modifier is None:
+        modifier = mesh_object.modifiers.new(name=modifier_name, type='ARMATURE')
+
+    modifier.object = armature_object
+    modifier.use_vertex_groups = True
+
+    # Explicitly NOT parented. Clear one if an earlier run (or a manual
+    # Ctrl+P > Armature Deform) left the mesh as a child, keeping it where it is.
+    if mesh_object.parent is not None:
+        previous_parent = mesh_object.parent.name
+        matrix = mesh_object.matrix_world.copy()
+        mesh_object.parent = None
+        mesh_object.matrix_world = matrix
+        print("bindMeshToArmature: cleared parent '{}' - the mesh stays top-level"
+              .format(previous_parent))
+
+    print("bindMeshToArmature: '{}' -> ARMATURE modifier on '{}' (not parented)"
+          .format(mesh_object.name, armature_object.name))
+    return modifier
+
+
+def mergeBonesIntoTargets(mesh_object, armature_object, rules=None, delete_bones=True):
+    """
+    Fold several bones' weights into one, then delete the merged bones.
+
+    This is the bone-count reduction step. With the defaults it collapses the G3F face
+    rig using dict_bones.bone_collapse_rules - 47 bones into head, 19 into lowerJaw,
+    taking the rig from 172 to 106.
+
+    `rules` is {target bone: [bones to absorb]}, taken LITERALLY. There is deliberately
+    no hierarchy walking: dict_bones.face_bones_merged_to_head / _to_lower_jaw are
+    explicit hardcoded lists precisely so the collapsed set is inspectable and editable,
+    rather than an emergent property of the rig. Move a name out of a list and that bone
+    survives.
+
+    Names not present in the rig are reported and skipped, and the target is never taken
+    as one of its own sources.
+
+    (For the interactive "select bones, merge into the active one" workflow, use
+    gmtt.mesh_merge_weights in the Game Mod Tiny Tools addon - it is not duplicated here.)
+
+    Runs AFTER both renames (bones in step 1, vertex groups in step 3), so bone names and
+    group names agree. Mapped bones appear here under their Manny names (foot.L), unmapped
+    ones under their Daz names (head, lowerJaw, lHeel, lMetatarsals, the face rig).
+
+    Weights are merged with merge_vgroups_into_existing (helper_vgroups.py), NOT
+    mergeSubgroupsIntoGroup - the latter wipes the target group first and would throw
+    away head's and lowerJaw's own weights.
+
+    Returns (merged_summary, deleted_bone_names).
+    """
+    if rules is None:
+        rules = dict_bones.bone_collapse_rules
+
+    if mesh_object is None or mesh_object.type != 'MESH':
+        print("mergeBonesIntoTargets: first argument must be a mesh.")
+        return ({}, [])
+    if armature_object is None or armature_object.type != 'ARMATURE':
+        print("mergeBonesIntoTargets: second argument must be an armature.")
+        return ({}, [])
+
+    # A careless edit to the hardcoded lists must not be able to delete a bone the rest
+    # of the pipeline depends on (lEye, upperTeeth, tongue01, ...).
+    protected = set(getattr(dict_bones, "bones_that_must_be_kept", []))
+    if protected:
+        for target_name, source_names in rules.items():
+            clash = protected.intersection(source_names)
+            if clash:
+                print("mergeBonesIntoTargets: ABORTED - {} are in the collapse list for "
+                      "'{}' but are marked must-keep.".format(sorted(clash), target_name))
+                return ({}, [])
+
+    bpy.ops.object.mode_set(mode='OBJECT')
+
+    summary = {}
+    all_swept = []
+
+    for target_name, root_names in rules.items():
+        if target_name not in armature_object.data.bones:
+            print("mergeBonesIntoTargets: target bone '{}' not in armature - skipped"
+                  .format(target_name))
+            continue
+
+        # Literal list. Keep only bones the rig actually has, and never the target.
+        bone_names = armature_object.data.bones.keys()
+        subtree = [n for n in root_names if n != target_name and n in bone_names]
+        absent = [n for n in root_names if n not in bone_names]
+        if absent:
+            print("  note: {} listed for '{}' but not in this rig".format(absent, target_name))
+
+        if not subtree:
+            print("mergeBonesIntoTargets: nothing to collapse into '{}'".format(target_name))
+            continue
+
+        written, used = merge_vgroups_into_existing(mesh_object, target_name, subtree)
+        summary[target_name] = {"swept": subtree, "groups_merged": used, "vertices": written}
+        all_swept.extend(subtree)
+
+        print("mergeBonesIntoTargets: -> '{}'  ({} bones, {} carried weight, {} verts)"
+              .format(target_name, len(subtree), len(used), written))
+
+    # The emptied source groups are now redundant; drop them so the later rename pass and
+    # the exporter do not see stale Daz groups.
+    for bone_name in all_swept:
+        deleteVertexGroup(mesh_object, bone_name)
+
+    deleted = []
+    if delete_bones and all_swept:
+        previous_active = bpy.context.scene.objects.active
+        bpy.ops.object.select_all(action='DESELECT')
+        armature_object.select = True
+        bpy.context.scene.objects.active = armature_object
+        bpy.ops.object.mode_set(mode='EDIT')
+        ebones = armature_object.data.edit_bones
+        doomed = set(all_swept)
+
+        # Reparent survivors BEFORE deleting, rather than trusting whatever Blender does
+        # with the children of a removed edit bone.
+        #
+        # This is what keeps the rig Manny-compatible at the foot: Manny has ball_l as a
+        # DIRECT child of foot_l, while Daz has lFoot -> lMetatarsals -> lToe. Dropping
+        # lMetatarsals without this would leave lToe orphaned; with it, lToe moves up onto
+        # lFoot and the rename gives foot.L -> ball.L.
+        reparented = []
+        for eb in ebones:
+            if eb.name in doomed or eb.parent is None:
+                continue
+            new_parent = eb.parent
+            while new_parent is not None and new_parent.name in doomed:
+                new_parent = new_parent.parent
+            if new_parent is not eb.parent:
+                reparented.append((eb.name, eb.parent.name,
+                                   new_parent.name if new_parent else None))
+                eb.parent = new_parent
+        for child_name, was, now in reparented:
+            print("  reparented '{}': {} -> {}".format(child_name, was, now))
+
+        # Explicit overrides on top of the nearest-surviving-ancestor rule. Daz parents
+        # the toes to lMetatarsals as siblings of lToe, so without this they would land
+        # on foot.L beside ball.L instead of under it.
+        for new_parent_name, child_names in getattr(dict_bones,
+                                                    "bone_reparent_overrides", {}).items():
+            new_parent = ebones.get(new_parent_name)
+            if new_parent is None:
+                print("  WARNING: reparent target '{}' not in the rig - {} left alone"
+                      .format(new_parent_name, child_names))
+                continue
+            for child_name in child_names:
+                child = ebones.get(child_name)
+                if child is None or child.name in doomed:
+                    continue
+                if child.parent is not new_parent:
+                    print("  reparented '{}': {} -> {} (override)".format(
+                        child_name, child.parent.name if child.parent else None,
+                        new_parent_name))
+                    child.parent = new_parent
+
+        # Deepest first, so removing a parent never orphans a bone we still have to visit.
+        for bone_name in sorted(doomed, key=len, reverse=True):
+            eb = ebones.get(bone_name)
+            if eb is not None:
+                ebones.remove(eb)
+                deleted.append(bone_name)
+
+        # The chains just changed shape, so re-derive the bone lengths. foot.L in
+        # particular was clamped against lMetatarsals and must now reach ball.L.
+        clampBoneLengthsToChildHeads(armature_object)
+
+        bpy.ops.object.mode_set(mode='OBJECT')
+        if previous_active is not None:
+            bpy.context.scene.objects.active = previous_active
+        print("mergeBonesIntoTargets: deleted {} collapsed bones, reparented {} survivors"
+              .format(len(deleted), len(reparented)))
+
+    return (summary, deleted)
+
+
+def setupTwistBones(mesh_object, armature_object, pairs=None):
+    """
+    Make the twist bones Manny-shaped: out of the chain, in pairs, weights blended.
+
+    Daz gives one twist per joint and puts it IN the chain
+    (lShldrBend -> lShldrTwist -> lForearmBend); Manny gives two and hangs them off the
+    parent as leaves. Three things are therefore done, in order:
+
+    1. TAKE THE TWISTS OUT OF THE CHAIN. Every child of a twist bone is reparented to
+       that twist's own parent, so calf.L moves from thigh_twist_01.L onto thigh.L,
+       lowerarm.L onto upperarm.L and hand.L onto lowerarm.L. This is exactly what
+       DazToUnreal's FixTwistBones (DazToUnrealFbx.cpp:174) does, and it forces it on for
+       every Convert-To-Epic run. Without it the limb hierarchy does not match Manny.
+
+    2. SETTLE THE PARENT LENGTHS. Only now that the twists are leaves does thigh.L
+       actually have calf.L as a direct child, so only now can it be stretched to reach
+       it. Ordering matters: the twist fractions in step 3 are measured off these
+       lengths, so clamping afterwards would leave them measured against stale ones.
+
+    3. CREATE AND REPOSITION BOTH TWISTS of each pair, from dict_bones.twist_bone_pairs -
+       spaced at 1/3 and 2/3 along the settled parent, each a third of it long, roll
+       copied from the parent. Existing Daz-derived twists are moved onto the same rule.
+
+    4. SPLIT THE WEIGHTS smoothly. Whichever of the pair already carries weight (usually
+       _01, but the forearm's single Daz twist maps to _02) is the source. Each weighted
+       vertex is projected onto the twist axis to get t in [0,1], and the weight is split
+       (1-t) to _01 and t to _02 - so influence hands over gradually along the limb
+       instead of switching abruptly. The sum is preserved exactly, so nothing changes at
+       rest; the pair only differs once they rotate.
+
+    Daz has no shin twist, so calf_twist_01/02 get no source weights. They are still
+    created, because Manny expects them, and are reported as empty.
+
+    Returns (created, repositioned, split_summary).
+    """
+    if pairs is None:
+        pairs = dict_bones.twist_bone_pairs
+
+    if mesh_object is None or mesh_object.type != 'MESH':
+        print("setupTwistBones: first argument must be a mesh.")
+        return ([], [], [])
+    if armature_object is None or armature_object.type != 'ARMATURE':
+        print("setupTwistBones: second argument must be an armature.")
+        return ([], [], [])
+
+    bpy.ops.object.mode_set(mode='OBJECT')
+    bpy.ops.object.select_all(action='DESELECT')
+    armature_object.select = True
+    bpy.context.scene.objects.active = armature_object
+    bpy.ops.object.mode_set(mode='EDIT')
+    ebones = armature_object.data.edit_bones
+
+    # --- 1. take the twists out of the chain ---------------------------------------
+    children_map = {}
+    for eb in ebones:
+        if eb.parent is not None:
+            children_map.setdefault(eb.parent.name, []).append(eb.name)
+
+    unchained = []
+    for bone_name, child_names in sorted(children_map.items()):
+        if "twist" not in bone_name.lower():
+            continue
+        twist_eb = ebones[bone_name]
+        new_parent = twist_eb.parent
+        for child_name in child_names:
+            child = ebones[child_name]
+            child.parent = new_parent
+            unchained.append((child_name, bone_name,
+                              new_parent.name if new_parent else None))
+    for child_name, was, now in unchained:
+        print("  twist out of chain: '{}' {} -> {}".format(child_name, was, now))
+
+    # --- 2. settle the PARENT lengths before measuring anything off them -------------
+    # This has to happen here, not after the twists are placed. Until step 1 ran, the
+    # joint bones' chain successors were hidden behind the in-line twists, so thigh.L
+    # was still clamped against thigh_twist_01.L rather than reaching calf.L. Placing
+    # the twists first would measure 1/3 and 2/3 of a length that is about to change.
+    clampBoneLengthsToChildHeads(armature_object)
+
+    # --- 3. create / reposition both twists of each pair -----------------------------
+    created, repositioned = [], []
+    parent_geometry = {}   # parent name -> (head, unit direction, length)
+    for parent_name, twists, length_fraction in pairs:
+        parent_eb = ebones.get(parent_name)
+        if parent_eb is None:
+            print("  WARNING: twist parent '{}' not in the rig - {} skipped"
+                  .format(parent_name, [n for n, f in twists]))
+            continue
+        parent_length = parent_eb.length
+        if parent_length <= 0.0:
+            print("  WARNING: '{}' has zero length - twists skipped".format(parent_name))
+            continue
+        direction = (parent_eb.tail - parent_eb.head).normalized()
+        parent_geometry[parent_name] = (parent_eb.head.copy(), direction.copy(), parent_length)
+
+        for twist_name, head_fraction in twists:
+            head = parent_eb.head + direction * (parent_length * head_fraction)
+            tail = head + direction * (parent_length * length_fraction)
+            eb = ebones.get(twist_name)
+            if eb is None:
+                eb = ebones.new(twist_name)
+                created.append(twist_name)
+            else:
+                repositioned.append(twist_name)
+            eb.head = head
+            eb.tail = tail
+            eb.roll = parent_eb.roll
+            eb.use_connect = False
+            eb.parent = parent_eb
+            print("  {:<22} at {:.0f}% of {}".format(
+                twist_name, head_fraction * 100.0, parent_name))
+
+    bpy.ops.object.mode_set(mode='OBJECT')
+    print("setupTwistBones: {} created, {} repositioned, {} bones taken out of chain"
+          .format(len(created), len(repositioned), len(unchained)))
+
+    # --- 4. split the weights smoothly ----------------------------------------------
+    split_summary = []
+    for parent_name, twists, length_fraction in pairs:
+        if parent_name not in parent_geometry:
+            continue
+        (name_01, fraction_01), (name_02, fraction_02) = twists[0], twists[1]
+        written = _splitTwistWeights(mesh_object, name_01, name_02,
+                                     parent_geometry[parent_name],
+                                     fraction_01, fraction_02)
+        if written is None:
+            print("  '{}' / '{}': no source weights (Daz has no twist here) - "
+                  "created empty".format(name_01, name_02))
+            for twist_name in (name_01, name_02):
+                if mesh_object.vertex_groups.get(twist_name) is None:
+                    mesh_object.vertex_groups.new(name=twist_name)
+        else:
+            split_summary.append((name_01, name_02, written))
+            print("  split {} verts between '{}' and '{}'".format(written, name_01, name_02))
+
+    return (created, repositioned, split_summary)
+
+
+def _splitTwistWeights(mesh_object, name_01, name_02, parent_geometry,
+                       fraction_01, fraction_02):
+    """
+    Blend one twist group's weights smoothly across the _01 / _02 pair.
+
+    Each weighted vertex is projected onto the PARENT bone's axis to give t in [0, 1]
+    (0 at the parent's head, 1 at its tail), which is then remapped onto the span the
+    two twists occupy. The twist sitting nearer the parent's head takes (1-u), the
+    other takes u, so influence hands over gradually instead of switching abruptly.
+
+    Which bone gets which end is derived from the fractions, not assumed - the calf
+    pair is deliberately reversed (_01 at 2/3 near the ankle, _02 at 1/3 near the
+    knee), and hard-coding "_01 gets the near end" would blend it backwards.
+
+    w*(1-u) + w*u == w, so total influence per vertex is unchanged and the mesh does
+    not move at rest; the pair only diverges once they rotate.
+
+    The source is whichever of the two already has a group - usually _01, but the Daz
+    forearm twist maps to _02 (DazToUnreal's "// The Lower Arm twists are swapped").
+
+    Returns the number of vertices written, or None if neither group has weights.
+    """
+    groups = mesh_object.vertex_groups
+    source = groups.get(name_01)
+    if source is None:
+        source = groups.get(name_02)
+    if source is None:
+        return None
+
+    head, direction, length = parent_geometry
+    if length <= 0.0:
+        return None
+
+    low = min(fraction_01, fraction_02)
+    high = max(fraction_01, fraction_02)
+    span = high - low
+    # Whichever twist sits nearer the parent's head owns the (1-u) end.
+    near_is_01 = fraction_01 <= fraction_02
+
+    matrix = mesh_object.matrix_world
+    source_index = source.index
+
+    # Read everything first: the source is one of the two groups about to be written.
+    samples = []
+    for v in mesh_object.data.vertices:
+        for g in v.groups:
+            if g.group == source_index and g.weight > 0.0:
+                world_co = matrix * v.co
+                t = (world_co - head).dot(direction) / length
+                if span > 0.0:
+                    u = (t - low) / span
+                else:
+                    u = 0.5
+                u = max(0.0, min(1.0, u))
+                samples.append((v.index, g.weight, u))
+                break
+
+    if not samples:
+        return None
+
+    group_01 = groups.get(name_01) or groups.new(name=name_01)
+    group_02 = groups.get(name_02) or groups.new(name=name_02)
+    for v_index, weight, u in samples:
+        near_weight = weight * (1.0 - u)
+        far_weight = weight * u
+        if near_is_01:
+            group_01.add([v_index], near_weight, 'REPLACE')
+            group_02.add([v_index], far_weight, 'REPLACE')
+        else:
+            group_01.add([v_index], far_weight, 'REPLACE')
+            group_02.add([v_index], near_weight, 'REPLACE')
+
+    return len(samples)
+
+
+def switchVertexGroupsToManny(mesh_object, armature_object=None, delete_unmapped=False):
+    """
+    Rename the mesh's Daz vertex groups to Manny names, matching the armature built by
+    alignArmatureFromDifeomorphicToManny.
+
+    The mapping is GENERATED from dict_bones.getMannyBoneRenameMap() rather than being a
+    second hand-written table. That is deliberate: the old VXMod path keeps its bone names
+    in difeomorphic_workflow_dictionaries_bones.py and its group names in
+    difeomorphic_workflow_dictionaries_vertex_groups.py, and the two had already drifted -
+    spine_weights_matching maps abdomenLower -> spine_01 while the bone table maps it to
+    spine_02, so the whole spine was off by one and spine_05 got no weights at all. With
+    one source of truth that cannot happen again.
+
+    This is a PURE 1:1 rename. All weight merging - the face rig into head/lowerJaw, the
+    heel and metatarsals into the foot - is done AFTERWARDS by mergeBonesIntoTargets,
+    which also deletes the bones. Keeping the two apart means this function cannot invent
+    a group that has no bone.
+
+    Order matters: the armature builder renamed the bones already, so this has to run
+    before the collapse or the two would still be in different name spaces and a rule
+    targeting foot.L would match the bone but not the group.
+
+    delete_unmapped is OFF by default. Anything it would remove is reported instead, so a
+    group that unexpectedly has no bone surfaces as a message rather than as silent data
+    loss.
+
+    Returns (renamed, merged, leftover_groups). `merged` is always empty and is kept only
+    so existing callers do not break.
+    """
+    if mesh_object is None or mesh_object.type != 'MESH':
+        print("switchVertexGroupsToManny: argument must be a mesh.")
+        return ([], [], [])
+
+    rename_map = dict_bones.getMannyBoneRenameMap()
+    merge_rules = {}
+    merged = []
+
+    # --- 1:1 renames ---------------------------------------------------------------
+    renamed = []
+    for daz_name, manny_name in rename_map.items():
+        if daz_name == manny_name:
+            continue
+        if daz_name not in mesh_object.vertex_groups:
+            continue
+        if manny_name in mesh_object.vertex_groups:
+            print("  WARNING: cannot rename '{}' -> '{}', target group already exists"
+                  .format(daz_name, manny_name))
+            continue
+        renameVertexGroup(mesh_object, daz_name, manny_name)
+        renamed.append((daz_name, manny_name))
+
+    # --- 3. report / optionally remove groups with no bone -------------------------
+    # Checked against the armature's actual bone names rather than guessing from the
+    # spelling of the group. This is the invariant that matters: a group with no bone
+    # deforms nothing, and a bone with no group is dead weight in the export.
+    if armature_object is not None and armature_object.type == 'ARMATURE':
+        bone_names = set(armature_object.data.bones.keys())
+        leftover = sorted(vg.name for vg in mesh_object.vertex_groups
+                          if vg.name not in bone_names)
+        boneless = sorted(bone_names - set(vg.name for vg in mesh_object.vertex_groups))
+    else:
+        manny_targets = set(rename_map.values()) | set(merge_rules.keys())
+        leftover = sorted(vg.name for vg in mesh_object.vertex_groups
+                          if vg.name not in manny_targets)
+        boneless = []
+
+    print("switchVertexGroupsToManny: {} renamed, {} merge rules applied".format(
+        len(renamed), len(merged)))
+
+    if leftover:
+        if delete_unmapped:
+            for group_name in leftover:
+                deleteVertexGroup(mesh_object, group_name)
+            print("  deleted {} groups with no matching bone: {}".format(len(leftover), leftover))
+        else:
+            print("  {} groups have NO matching bone (left in place, not deleted):"
+                  .format(len(leftover)))
+            print("      {}".format(leftover))
+
+    if boneless:
+        print("  {} bones have no vertex group (they will not deform anything):"
+              .format(len(boneless)))
+        print("      {}".format(boneless))
+
+    return (renamed, merged, leftover)
+
+
+def reorientArmatureFromDifeomorphicToManny(vx_armature=None):
+    """
+    NOT IMPLEMENTED YET - deliberately left as a stub.
+
+    This is the second half of DazToUnreal's ConvertToEpicSkeleton: the
+    re-orientation pass at DazToUnrealBlueprintUtils.cpp:369-527. It changes bone
+    ORIENTATION only; alignArmatureFromDifeomorphicToManny above already handles
+    naming, hierarchy and position.
+
+    For G3F it touches 53 bones via three primitives:
+
+      SetBoneOrientation(bone, quat)       - REPLACES the local rotation
+      AdditiveBoneOrientation(bone, quat)  - POST-MULTIPLIES onto it
+      AlignBone(parent, child, axis)       - rotates parent so its local +X
+                                             points at child; angle computed
+                                             from the mesh, not a constant
+
+    Only 7 bones get a non-trivial absolute rotation - pelvis (90,-90,-90),
+    clavicle.L (-87,-180,180), clavicle.R (-87,0,180), thigh.R (0,-180,0),
+    ball.L/ball.R (0,90,0). Everything else is zeroed and then aligned.
+
+    Three things to be careful about when this gets written:
+      * The whole right hand (hand.R + its 16 index/middle/ring/pinky bones)
+        receives NO rotation at all in DazToUnreal, while the left hand gets a
+        -180 roll. That asymmetry is real in the plugin - verify it is correct
+        against an actual export before reproducing it.
+      * DazToUnreal's AlignBone uses atan (not atan2) and has no guard for a zero
+        X component, which is why lowerarm->hand is applied twice per side. In
+        Blender the same intent is just `tail = child.head`, which sidesteps it.
+      * Rotation values are in Unreal convention: FRotator(Pitch, Yaw, Roll) =
+        (Y, Z, X) degrees, left-handed, Z-up, 1uu = 1cm. They are NOT
+        pre-converted to Blender's right-handed system.
+
+    Full per-bone op list, in order, with source line numbers:
+        D:\\code\\DazToUnreal\\blender_reference\\g3f_bone_transforms.json
+        D:\\code\\DazToUnreal\\blender_reference\\G3F_bone_transforms.md
+    """
+    print("reorientArmatureFromDifeomorphicToManny: not implemented yet")
+    return {'CANCELLED'}
 
 
 def alignArmatureToDifeomorphicNew():

@@ -261,27 +261,49 @@ class VXMOD_CONVERTER_OT_PanelDifeomorphicToVXMod(bpy.types.Panel):
     bl_category = "VXMod"
     def draw(self,context):
         layout=self.layout
-        box = layout.box()
         scene=context.scene
         vxmod  = scene.vxmod
-        #
-        row=box.row(align=True)
-        row.operator('vxmod.fake',text='              ')
-        row.operator('vxmod.convert_g3fdifeo_to_vxmodf',text='G3F'+u'→'+'VX body',icon='OBJECT_DATA')      
-        row.operator('vxmod.armature_adjust_rig_to_shape',text='Adjust Rig to VX body',icon_value=custom_icons["wand_icon"].icon_id)
-        row=box.row(align=True)
-        row.operator('vxmod.fake',text='              ')
-        row.operator('vxmod.switch_to_vxmod_vertex_groups',text='Switch Vertex Groups',icon='GROUP_VERTEX')    
-        row.operator('vxmod.fake',text='              ')   
-        row=box.row(align=True)
-        row.operator('vxmod.fake',text='              ')
-        row.operator('vxmod.fake',text='              ')
-        row.operator('vxmod.armature_make_friendly_ik_joints',text='Force friendly IK joints',icon_value=custom_icons["wand_icon"].icon_id)
-        row=box.row(align=True)
-        row.operator('vxmod.convert_g3fdifeo_to_vxmodf_new',text='Difeo '+u'→'+' VXMod',icon='ARMATURE_DATA')      
-        row.operator('vxmod.fake',text='              ')
-        row.operator('vxmod.fake',text='              ')
-        
+
+        # --- Step 1: mesh + materials. Shared by both skeleton paths below, because
+        #     each of them needs body_subdiv_cage to exist first.
+        step1_box = layout.box()
+        step1_box.label(text="1. Mesh", icon='OBJECT_DATA')
+        step1_box.label(text="Select the Difeomorphic G3F armature")
+        step1_box.operator('vxmod.convert_g3fdifeo_to_vxmodf',
+                           text='G3F'+u'→'+'VX body', icon='OBJECT_DATA')
+
+        # --- Step 2: the current path. One button does armature + bind + face collapse
+        #     + vertex groups, and finds both objects on its own.
+        step2_box = layout.box()
+        step2_box.label(text="2. Manny skeleton", icon='POSE_HLT')
+        step2_box.label(text="Nothing to select")
+        step2_box.operator('vxmod.convert_g3fdifeo_to_vxmodf_manny_full',
+                           text='Manny FULL', icon='POSE_HLT')
+        step2_box.label(text="or run the steps separately:")
+        row = step2_box.row(align=True)
+        row.operator('vxmod.convert_g3fdifeo_to_vxmodf_manny',
+                     text='Armature only', icon='ARMATURE_DATA')
+        row.operator('vxmod.switch_to_manny_vertex_groups',
+                     text='Vertex Groups only', icon='GROUP_VERTEX')
+
+        # --- The original VXMod skeleton. Kept working and deliberately untouched, but
+        #     it targets a different skeleton than the Manny path - do not mix the two.
+        legacy_box = layout.box()
+        legacy_box.label(text="Legacy VXMod skeleton", icon='ARMATURE_DATA')
+        legacy_box.label(text="Needs an 'Armature' in the scene already")
+        row = legacy_box.row(align=True)
+        row.operator('vxmod.convert_g3fdifeo_to_vxmodf_new',
+                     text='Difeo '+u'→'+' VXMod', icon='ARMATURE_DATA')
+        row.operator('vxmod.armature_adjust_rig_to_shape',
+                     text='Adjust Rig to VX body',
+                     icon_value=custom_icons["wand_icon"].icon_id)
+        row = legacy_box.row(align=True)
+        row.operator('vxmod.switch_to_vxmod_vertex_groups',
+                     text='Switch Vertex Groups', icon='GROUP_VERTEX')
+        row.operator('vxmod.armature_make_friendly_ik_joints',
+                     text='Force friendly IK joints',
+                     icon_value=custom_icons["wand_icon"].icon_id)
+
 
 
 class ARMATURE_OT_ConstraintsPanel(bpy.types.Panel):
@@ -741,6 +763,118 @@ class CONVERT_OT_G3F_Body_Difeomorphic_new(bpy.types.Operator):
     def execute(self, context):
         alignArmatureToDifeomorphicNew()
         return {'FINISHED'}
+
+class CONVERT_OT_G3F_Body_Difeomorphic_manny(bpy.types.Operator):
+    ''''''
+    bl_idname = "vxmod.convert_g3fdifeo_to_vxmodf_manny"
+    bl_label = ""
+    bl_description = "Build the Manny armature from the selected Difeomorphic G3F rig"
+    bl_options = {'UNDO'}
+    def execute(self, context):
+        alignArmatureFromDifeomorphicToManny()
+        return {'FINISHED'}
+
+
+class CONVERT_OT_G3F_Body_Difeomorphic_manny_full(bpy.types.Operator):
+    '''
+    Full Manny conversion: armature, bind, face collapse, vertex-group rename.
+
+    Nothing needs to be selected. The Difeomorphic G3F armature and the converted body
+    mesh are both found automatically; just run "G3F->VX body" first so the mesh exists.
+    '''
+    bl_idname = "vxmod.convert_g3fdifeo_to_vxmodf_manny_full"
+    bl_label = ""
+    bl_description = "Full Manny conversion: armature + bind + face collapse + vertex groups"
+    bl_options = {'UNDO'}
+
+    def execute(self, context):
+        scene = bpy.context.scene
+        vxmod = scene.vxmod
+
+        # Find both objects up front so we fail before changing anything.
+        source_armature, error = findDiffeomorphicArmature()
+        if error:
+            ShowMessageBox(error, "Error", 'ERROR')
+            return {'CANCELLED'}
+
+        mesh_object, error = findConvertedBodyMesh(vxmod.exportable_mesh)
+        if error:
+            ShowMessageBox(error, "Error", 'ERROR')
+            return {'CANCELLED'}
+
+        print("Manny FULL: armature '{}' -> mesh '{}'".format(
+            source_armature.name, mesh_object.name))
+
+        # alignArmatureFromDifeomorphicToManny reads the ACTIVE object, so make it so
+        # rather than asking the user to get the selection right.
+        if bpy.context.mode != 'OBJECT':
+            bpy.ops.object.mode_set(mode='OBJECT')
+        bpy.ops.object.select_all(action='DESELECT')
+        source_armature.select = True
+        source_armature.hide = False
+        bpy.context.scene.objects.active = source_armature
+
+        # 1. Build the armature. Guards live inside; it refuses if "Armature" exists.
+        result = alignArmatureFromDifeomorphicToManny()
+        if result == {'CANCELLED'} or "Armature" not in bpy.data.objects:
+            return {'CANCELLED'}
+        vx_armature = bpy.data.objects["Armature"]
+
+        # 2. Link the ARMATURE modifier (no parenting) so the exporter guard at
+        #    exporter_unreal.py:421 is satisfied.
+        bindMeshToArmature(mesh_object, vx_armature)
+
+        # 3. Rename the vertex groups to match the bones, using the same map the armature
+        #    builder used. This MUST come before the collapse: step 1 already renamed the
+        #    bones, so until the groups catch up the two are in different name spaces and
+        #    a rule targeting foot.L would find the bone but not the group.
+        switchVertexGroupsToManny(mesh_object, vx_armature)
+
+        # 4. Collapse the face rig into head / lowerJaw and the heel + metatarsals into
+        #    the foot, then delete those bones and reparent the survivors.
+        mergeBonesIntoTargets(mesh_object, vx_armature)
+
+        # 5. Twist bones: take them out of the chain (Manny wants them as leaves), build
+        #    both halves of each pair, and blend the weights across them.
+        setupTwistBones(mesh_object, vx_armature)
+
+        # Leave the mesh selected and pointed at by the selector, ready to export.
+        if bpy.context.mode != 'OBJECT':
+            bpy.ops.object.mode_set(mode='OBJECT')
+        bpy.ops.object.select_all(action='DESELECT')
+        mesh_object.select = True
+        bpy.context.scene.objects.active = mesh_object
+
+        self.report({'INFO'}, "Manny conversion complete - see the console for the report")
+        return {'FINISHED'}
+
+
+class MESH_OT_Switch_To_Manny_Vertex_Groups(bpy.types.Operator):
+    ''''''
+    bl_idname = "vxmod.switch_to_manny_vertex_groups"
+    bl_label = ""
+    bl_description = "Rename Daz vertex groups to Manny names matching the Manny armature"
+    bl_options = {'UNDO'}
+
+    def execute(self, context):
+        scene = bpy.context.scene
+        vxmod = scene.vxmod
+        mesh_name = vxmod.exportable_mesh
+        if not mesh_name or mesh_name not in bpy.data.objects:
+            ShowMessageBox("Pick the body mesh in the VXMod mesh selector first.",
+                           "Error", 'ERROR')
+            return {'CANCELLED'}
+        mesh_object = bpy.data.objects[mesh_name]
+
+        vx_armature = None
+        for mod in mesh_object.modifiers:
+            if mod.type == 'ARMATURE':
+                vx_armature = mod.object
+                break
+
+        switchVertexGroupsToManny(mesh_object, vx_armature)
+        return {'FINISHED'}
+
 
 class CONVERT_OT_G3F_Body_Difeomorphic(bpy.types.Operator):
     ''''''
