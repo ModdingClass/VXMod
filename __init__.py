@@ -286,6 +286,33 @@ class VXMOD_CONVERTER_OT_PanelDifeomorphicToVXMod(bpy.types.Panel):
         row.operator('vxmod.switch_to_manny_vertex_groups',
                      text='Vertex Groups only', icon='GROUP_VERTEX')
 
+        # Roll comparison. The label reports the current state and says what a
+        # click will do, so it reads as a switch rather than a fire-and-forget.
+        manny_armature = bpy.data.objects.get("Armature")
+        state = (manny_armature.data.get(ORIENTATION_PROP)
+                 if manny_armature is not None and manny_armature.type == 'ARMATURE'
+                 else None)
+        row = step2_box.row(align=True)
+        if state == ORIENTATION_BP:
+            row.operator('vxmod.toggle_blender_perfect_rolls',
+                         text='Rolls: PERFECT '+u'→'+' show Daz', icon='CHECKBOX_HLT')
+        elif state == ORIENTATION_DAZ:
+            row.alert = True
+            row.operator('vxmod.toggle_blender_perfect_rolls',
+                         text='Rolls: DAZ '+u'→'+' make perfect', icon='CHECKBOX_DEHLT')
+        elif state == ORIENTATION_UE5:
+            row.enabled = False
+            row.operator('vxmod.toggle_blender_perfect_rolls',
+                         text='Rolls: UE5 export orientation', icon='ERROR')
+        else:
+            row.enabled = False
+            row.operator('vxmod.toggle_blender_perfect_rolls',
+                         text='Rolls: no Manny armature yet', icon='CHECKBOX_DEHLT')
+        row = step2_box.row(align=True)
+        row.enabled = state is not None
+        row.operator('vxmod.report_roll_rule_deltas',
+                     text='Roll rule report '+u'→'+' console', icon='CONSOLE')
+
         # --- The original VXMod skeleton. Kept working and deliberately untouched, but
         #     it targets a different skeleton than the Manny path - do not mix the two.
         legacy_box = layout.box()
@@ -430,7 +457,7 @@ class EXPORT_PT_VXModToUnreal(bpy.types.Panel):
         row_extra=extra_export_box.row(align=True)
         row_extra.prop(vxmod,'includeGeograftsOnExportUnreal',text="Include Geografts")
         #row_extra.alignment = 'RIGHT'
-        row_extra.prop(vxmod,'reorientBonesOnExportUnreal',text="Re-Orient Bones (TODO)")
+        row_extra.prop(vxmod,'reorientBonesOnExportUnreal',text="Re-Orient Bones")
         
         #row_extra=extra_export_box.row(align=True)
         #extra_subdiv_box = row_extra.column()
@@ -838,6 +865,17 @@ class CONVERT_OT_G3F_Body_Difeomorphic_manny_full(bpy.types.Operator):
         #    both halves of each pair, and blend the weights across them.
         setupTwistBones(mesh_object, vx_armature)
 
+        # 6. Re-apply the BlenderPerfect rolls. Step 1 already did this, but the twists
+        #    created in step 5 only inherited their parent's roll - this puts them on the
+        #    table directly. Idempotent, so re-running costs nothing but certainty.
+        applyBlenderPerfectRolls(vx_armature)
+
+        # Display settings for inspecting the result: see the bones through the body, and
+        # show each bone's axes so roll is visible at a glance. show_x_ray is an Object
+        # property, show_axes lives on the armature data.
+        vx_armature.show_x_ray = True
+        vx_armature.data.show_axes = True
+
         # Leave the mesh selected and pointed at by the selector, ready to export.
         if bpy.context.mode != 'OBJECT':
             bpy.ops.object.mode_set(mode='OBJECT')
@@ -846,6 +884,77 @@ class CONVERT_OT_G3F_Body_Difeomorphic_manny_full(bpy.types.Operator):
         bpy.context.scene.objects.active = mesh_object
 
         self.report({'INFO'}, "Manny conversion complete - see the console for the report")
+        return {'FINISHED'}
+
+
+class ARMATURE_OT_Report_Roll_Rule_Deltas(bpy.types.Operator):
+    ''''''
+    bl_idname = "vxmod.report_roll_rule_deltas"
+    bl_label = ""
+    bl_description = ("Print to the console how far each Diffeomorphic roll is "
+                      "from the rule (X on the joint's natural hinge). Run once "
+                      "with the rolls toggled to DAZ - if the deltas land on "
+                      "multiples of 90 they can be frozen into a hardcoded table")
+    bl_options = {'REGISTER'}
+
+    def execute(self, context):
+        armature_object = context.active_object
+        if armature_object is None or armature_object.type != 'ARMATURE':
+            armature_object = bpy.data.objects.get("Armature")
+        if armature_object is None or armature_object.type != 'ARMATURE':
+            self.report({'ERROR'}, "No active armature and no object named 'Armature'")
+            return {'CANCELLED'}
+
+        state = armature_object.data.get(ORIENTATION_PROP)
+        if state == ORIENTATION_BP:
+            self.report({'WARNING'},
+                        "Rolls are on PERFECT - the deltas will read as ~0. "
+                        "Toggle to DAZ first for the numbers you want")
+
+        result = reportRollRuleDeltas(armature_object)
+        if result == {'CANCELLED'}:
+            self.report({'ERROR'}, "Nothing reported - see the console")
+            return {'CANCELLED'}
+        self.report({'INFO'}, "Roll rule report written to the console")
+        return {'FINISHED'}
+
+
+class ARMATURE_OT_Toggle_Blender_Perfect_Rolls(bpy.types.Operator):
+    ''''''
+    bl_idname = "vxmod.toggle_blender_perfect_rolls"
+    bl_label = ""
+    bl_description = ("Flip the armature between the BlenderPerfect rolls and the "
+                      "original Diffeomorphic ones, to compare. Rolls only - "
+                      "nothing else about the rig changes, and it is lossless "
+                      "both ways. Works in Edit mode and leaves you there")
+    bl_options = {'REGISTER', 'UNDO'}
+
+    def execute(self, context):
+        armature_object = context.active_object
+        if armature_object is None or armature_object.type != 'ARMATURE':
+            armature_object = bpy.data.objects.get("Armature")
+        if armature_object is None or armature_object.type != 'ARMATURE':
+            self.report({'ERROR'}, "No active armature and no object named 'Armature'")
+            return {'CANCELLED'}
+
+        result, state = toggleBlenderPerfectRolls(armature_object)
+
+        # Edit-mode bone changes do not always trigger a redraw on their own, and
+        # the whole point of this button is watching the axes move.
+        for area in context.screen.areas:
+            if area.type in ('VIEW_3D', 'PROPERTIES'):
+                area.tag_redraw()
+        if result == {'CANCELLED'}:
+            if state == ORIENTATION_UE5:
+                self.report({'ERROR'}, "That rig is in UE5 export orientation - "
+                                       "the difference is not just roll")
+            else:
+                self.report({'ERROR'}, "Nothing to toggle - see the console")
+            return {'CANCELLED'}
+
+        self.report({'INFO'}, "%s rolls: %s"
+                    % (armature_object.name,
+                       "BlenderPerfect" if state == ORIENTATION_BP else "Diffeomorphic"))
         return {'FINISHED'}
 
 

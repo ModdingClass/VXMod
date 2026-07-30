@@ -748,7 +748,458 @@ def _notify_export_complete():
 
 
 
+ORIENTATION_PROP = "vx_orientation"
+ORIENTATION_BP = "BP"
+ORIENTATION_UE5 = "UE5"
+ORIENTATION_DAZ = "DAZ"
+
+
+def _unreal_bone_name(name):
+    """calf.L -> calf_l. The inverse of manny_blender_perfect_generated's
+    normalizeBoneName. Bones with no side suffix pass through untouched.
+
+    Blender accepts '.', '_', '-' and space as side separators, so .L/.R is a
+    house style rather than a requirement - which is why the working rig can keep
+    it and only the export clone gets the Unreal spelling."""
+    if len(name) > 2 and name[-2] == '.':
+        side = name[-1].lower()
+        if side in ('l', 'r'):
+            return name[:-2] + '_' + side
+    return name
+
+
+def rename_bones_for_unreal(armature_clone):
+    """Rename the clone's bones from .L/.R to Epic's _l/_r.
+
+    Vertex groups come along for free: renaming a bone propagates to the matching
+    vertex group on every mesh whose ARMATURE modifier points at THIS armature.
+    Meshes still bound to the original are silently left behind, which surfaces as
+    an unweighted mesh in Unreal rather than an error here - so the bound meshes
+    are logged.
+
+    Must run LATE. In the animation path the retarget constraints use
+    `subtarget = pbone.name` against the ORIGINAL armature, which still carries
+    .L/.R; rename before the bake and no subtarget resolves and the animation
+    comes out empty. Orientation, by contrast, is order independent - the roll
+    tables are keyed on the _l form and normalizeBoneName leaves it alone.
+
+    Returns the number of bones renamed, or None if it refused."""
+    if bpy.context.object is not None and bpy.context.object.mode != 'OBJECT':
+        bpy.ops.object.mode_set(mode='OBJECT')
+
+    bones = armature_clone.data.bones
+    pairs = [(b.name, _unreal_bone_name(b.name)) for b in bones]
+    pairs = [(old, new) for old, new in pairs if old != new]
+    if not pairs:
+        print("rename_bones_for_unreal: nothing to rename on {}".format(armature_clone.name))
+        return 0
+
+    # A collision would make Blender uniquify to calf_l.001, which Unreal will not
+    # recognise. Refuse the whole rename rather than half-apply it.
+    keeping = set(b.name for b in bones) - set(old for old, new in pairs)
+    clashes = []
+    seen = set()
+    for old, new in pairs:
+        if new in keeping or new in seen:
+            clashes.append("{} -> {}".format(old, new))
+        seen.add(new)
+    if clashes:
+        message = ("Bone name collision renaming for Unreal, nothing renamed: "
+                   + ", ".join(clashes))
+        print("rename_bones_for_unreal: " + message)
+        ShowMessageBox(message, "Export", 'ERROR')
+        return None
+
+    bound = [ob.name for ob in bpy.data.objects
+             if ob.type == 'MESH' and any(m.type == 'ARMATURE' and m.object == armature_clone
+                                          for m in ob.modifiers)]
+
+    for old, new in pairs:
+        bones[old].name = new
+
+    print("rename_bones_for_unreal: renamed {} bones on {}; vertex groups followed "
+          "on {} bound mesh(es): {}".format(len(pairs), armature_clone.name,
+                                            len(bound), bound))
+    if not bound:
+        print("  WARNING: no mesh is bound to this armature - if a mesh is being "
+              "exported alongside it, its vertex groups still carry the .L/.R names")
+    return len(pairs)
+
+
+def orient_bones_for_unreal(armature_clone, armature_object):
+    """Put the clone into UE5 orientation, picking the route from the rig's stamp.
+
+    A BlenderPerfect rig (anything the Manny builder produced) goes through the
+    generated per-bone constants. Anything else - the old VXMod skeleton - falls
+    through to the legacy hand-tuned pass so existing exports keep working."""
+    state = armature_clone.data.get(ORIENTATION_PROP)
+    if state == ORIENTATION_BP:
+        return orient_bones_for_unreal_from_blender_perfect(armature_clone)
+    if state == ORIENTATION_UE5:
+        print("orient_bones_for_unreal: already in UE5 orientation, skipping")
+        return
+    if state == ORIENTATION_DAZ:
+        # The roll comparison toggle was left switched off. Applying the
+        # BlenderPerfect export constants to Daz rolls would mis-orient every
+        # joint, and the legacy pass is not for this rig either.
+        message = ("Armature rolls are toggled back to Diffeomorphic. Switch the "
+                   "roll toggle back to PERFECT before exporting.")
+        print("orient_bones_for_unreal: " + message)
+        ShowMessageBox(message, "Export", 'ERROR')
+        return
+    print("orient_bones_for_unreal: no '{}' stamp (got {!r}) - using the legacy pass"
+          .format(ORIENTATION_PROP, state))
+    reorient_bones_for_unreal(armature_clone, armature_object)
+
+
+def blender_perfect_to_blender_friendly(armature_clone):
+    """Step 1 of 2: BlenderPerfect -> BlenderFriendly. Roll only.
+
+    BlenderFriendly is the orientation defined by the property that a single
+    +/-90 about each bone's own Z axis lands on UE5. Getting there from
+    BlenderPerfect is a pure roll change, so heads, tails and directions are
+    untouched and nothing here can move a bone.
+
+    Returns the number of bones re-rolled."""
+    from .g3f import manny_blender_perfect_generated as manny_bp
+
+    _enter_edit_on(armature_clone)
+    rolled = 0
+    untouched = []
+    for ebone in armature_clone.data.edit_bones:
+        delta = manny_bp.getBpToBfRollDelta(ebone.name)
+        if delta is None:
+            untouched.append(ebone.name)
+            continue
+        ebone.roll -= math.radians(delta)
+        rolled += 1
+    bpy.ops.object.mode_set(mode='OBJECT')
+
+    print("  BP -> BF: {} bones re-rolled, {} left alone".format(rolled, len(untouched)))
+    if untouched:
+        print("     no Manny counterpart: {}".format(sorted(untouched)))
+    return rolled
+
+
+def blender_friendly_to_ue5(armature_clone):
+    """Step 2 of 2: BlenderFriendly -> UE5.
+
+    +/-90 about each bone's own Z axis, the sign taken from flippedBones - the
+    bones Epic runs 180 deg from the naive mirror. This is the step the whole
+    convention is built around, and it is where the left/right asymmetry lives.
+
+    Post-multiplying the edit bone matrix keeps the head exactly in place and does
+    not depend on the pivot setting or on a 3D view being present, unlike the
+    legacy transform.rotate approach.
+
+    Returns (rotated, flipped_count)."""
+    from .g3f import manny_blender_perfect_generated as manny_bp
+
+    _enter_edit_on(armature_clone)
+    ebones = armature_clone.data.edit_bones
+
+    # A connected child is glued to its parent's tail, so rotating the parent
+    # would drag the child's head with it. Break that link first - the heads are
+    # already in the right place.
+    disconnected = 0
+    for ebone in ebones:
+        if ebone.use_connect:
+            ebone.use_connect = False
+            disconnected += 1
+
+    rotated = 0
+    flipped_count = 0
+    untouched = []
+    for ebone in ebones:
+        if manny_bp.getBpToBfRollDelta(ebone.name) is None:
+            untouched.append(ebone.name)
+            continue
+        is_flipped = manny_bp.isFlipped(ebone.name)
+        angle = -90.0 if is_flipped else 90.0
+        ebone.matrix = ebone.matrix * Matrix.Rotation(math.radians(angle), 4, 'Z')
+        rotated += 1
+        flipped_count += 1 if is_flipped else 0
+    bpy.ops.object.mode_set(mode='OBJECT')
+
+    print("  BF -> UE5: {} bones rotated ({} at -90 from flippedBones, {} at +90), "
+          "{} disconnected, {} left alone"
+          .format(rotated, flipped_count, rotated - flipped_count,
+                  disconnected, len(untouched)))
+    return rotated, flipped_count
+
+
+def _enter_edit_on(armature_clone):
+    """Make the clone active before entering edit mode.
+
+    bpy.ops.object.mode_set acts on the ACTIVE object, so without this a caller
+    with something else selected silently edits an empty edit_bones collection
+    and every orientation step becomes a no-op that still reports success. The
+    export path happens to leave the clone active, but relying on that is how a
+    whole conversion goes missing without an error."""
+    scene = bpy.context.scene
+    if scene.objects.active is not armature_clone:
+        if scene.objects.active is not None and scene.objects.active.mode != 'OBJECT':
+            bpy.ops.object.mode_set(mode='OBJECT')
+        scene.objects.active = armature_clone
+    bpy.ops.object.mode_set(mode='EDIT', toggle=False)
+
+
+def _find_bone(ebones, base, side):
+    """Look a bone up under either naming convention, .L/.R or _l/_r."""
+    for name in (base + side, base + ('_l' if side == '.L' else '_r')):
+        if name in ebones:
+            return ebones[name]
+    return None
+
+
+def _find_either_spelling(ebones, name):
+    """Find a bone given either spelling of its name, or None.
+
+    The helper table is written in UE form (ik_foot_l) but the rig is still on
+    Blender names (.L/.R) until rename_bones_for_unreal runs. Checking only one
+    spelling is how you end up creating ik_foot_l next to an existing ik_foot.L.
+    """
+    if name in ebones:
+        return ebones[name]
+    if len(name) > 2 and name[-2] == '_' and name[-1] in ('l', 'r'):
+        other = name[:-2] + '.' + name[-1].upper()
+        if other in ebones:
+            return ebones[other]
+    return None
+
+
+def reaim_feet_for_unreal(armature_clone):
+    """Rebuild the foot and ball frames from the rig's own geometry.
+
+    This is the one bone the +/-90 step cannot reach. In Blender the foot points
+    at its child, the ball - the natural thing to build. Manny's does not: it
+    follows the calf, sitting 64.38 deg away from the ball, with its own direction
+    lying along the horizontal foot->ball line instead. A rotation about the
+    bone's own Z axis can change a bone's roll but never where it points, so this
+    has to set the frame outright.
+
+    Measured from the UE5 reference, per side:
+
+        Y (the bone's direction)  the horizontal foot->ball line,
+                                  negated on the left
+        X                         world DOWN on the left, world UP on the right
+        Z = X x Y                 falls out pointing to the body's right on both
+
+    and the ball is that same frame turned 90 deg about the shared Z, which the
+    reference confirms on both sides.
+
+    Heads are untouched, so this is safe to run after the two orientation steps -
+    it reads only foot.head and ball.head, which neither of them moves. Epic's
+    reason for the convention is foot roll and IK: pinning the frame to the toe
+    line and the ground plane is what makes a foot behave on stairs and uneven
+    ground.
+    """
+    _enter_edit_on(armature_clone)
+    ebones = armature_clone.data.edit_bones
+
+    done = []
+    for side, vertical in (('.L', -1.0), ('.R', 1.0)):
+        foot = _find_bone(ebones, 'foot', side)
+        ball = _find_bone(ebones, 'ball', side)
+        if foot is None or ball is None:
+            print("  foot re-aim: no foot/ball pair for {} - skipped".format(side))
+            continue
+
+        toe = ball.head - foot.head
+        flat = Vector((toe.x, toe.y, 0.0))
+        if flat.length < 1e-6:
+            print("  foot re-aim: {} foot and ball are vertically aligned, "
+                  "no toe direction - skipped".format(side))
+            continue
+        flat.normalize()
+
+        y = flat * (-1.0 if side == '.L' else 1.0)
+        x = Vector((0.0, 0.0, vertical))
+        z = x.cross(y).normalized()
+
+        def frame(head):
+            return Matrix(((x.x, y.x, z.x, head.x),
+                           (x.y, y.y, z.y, head.y),
+                           (x.z, y.z, z.z, head.z),
+                           (0.0, 0.0, 0.0, 1.0)))
+
+        foot_head = foot.head.copy()
+        ball_head = ball.head.copy()
+        foot.matrix = frame(foot_head)
+        ball_frame = frame(ball_head) * Matrix.Rotation(math.radians(90), 4, 'Z')
+        ball_frame.translation = ball_head
+        ball.matrix = ball_frame
+        done.append(side)
+
+    bpy.ops.object.mode_set(mode='OBJECT')
+    print("  foot re-aim: rebuilt foot and ball frames for {}".format(done or "nothing"))
+    return done
+
+
+def apply_ue5_roll_correction(armature_clone):
+    """Add 180 deg to every bone's roll. REQUIRED for a correct export.
+
+    Runs LAST and over EVERY bone, and both of those matter:
+
+      * after reaim_feet_for_unreal, so the rebuilt foot and ball frames get it
+        too - they are absolute, so anything applied before is discarded;
+      * over the Daz extras (toes, breasts, eyes, teeth, tongue) as well, which
+        skip the two conversion steps entirely because they have no Manny
+        counterpart. Whether a bare 180 is *right* for them is unknowable - there
+        is no reference to compare against - but it is what shipped and was
+        confirmed, so it stays until something says otherwise.
+
+    That is why this cannot be folded into blender_friendly_to_ue5: doing so
+    would quietly drop it from the feet and from all 41 extras.
+
+    Not a fudge, despite looking like one. The ArmatureUE5 reference that this
+    whole convention was derived from is reconstructed by io_unreal_dump_importer
+    180 deg ROLLED from the state the FBX writer needs: the bones look right in
+    the viewport, but exporting them lands every bone flipped in Unreal. Measuring
+    the reconstruction against Manny's real rotators in bone_data.csv shows it
+    directly - UE red comes out as MINUS Blender X and UE green as MINUS Blender
+    Y, which is exactly a 180 about each bone's own axis.
+    (roll += 180 is X -> -X, Z -> -Z, direction unchanged.)
+    Confirmed against a real Unreal import.
+
+    The legacy reorient_bones_for_unreal ended with the same `roll += radians(180)`
+    and was silently correcting for this all along.
+
+    Note the algebra: Rz(sigma*90) * Ry(180) == Ry(180) * Rz(-sigma*90). Applying
+    the 180 at the end is identical to inverting the flippedBones sign and
+    applying it first - which is why "isFlipped looks backwards" is a reasonable
+    reading of the same symptom."""
+    _enter_edit_on(armature_clone)
+    count = 0
+    for ebone in armature_clone.data.edit_bones:
+        ebone.roll += math.radians(180.0)
+        count += 1
+    bpy.ops.object.mode_set(mode='OBJECT')
+    print("  UE5 roll correction (+180) applied to {} bones".format(count))
+    return count
+
+
+def add_missing_unreal_bones(armature_clone):
+    """Add the Unreal helper bones the Daz rig never had.
+
+    Manny carries ten bones the builder does not create - the IK markers plus
+    interaction and center_of_mass. They deform nothing, but Unreal's retarget and
+    IK setups expect them.
+
+    Each is placed at the WORLD position of the bone it shadows, which is what
+    Epic does. That matters because the hierarchy does not follow the geometry:
+    ik_foot_l hangs off ik_foot_root, which sits at the origin, so its position
+    cannot be inherited from the foot. Blender edit-bone heads are already in
+    armature space, so copying foot.head across gives the world placement whatever
+    the parenting is.
+
+    See unreal_helper_bones in difeomorphic_workflow_dictionaries_bones for the
+    table and the measurements behind it. `root` is not in it - the FBX exporter
+    synthesises the root from the armature object, so adding one would give two.
+
+    Anything already present is left alone, so this is safe to re-run and safe on
+    a rig that does have them.
+    """
+    from .g3f import difeomorphic_workflow_dictionaries_bones as dict_bones
+
+    _enter_edit_on(armature_clone)
+    ebones = armature_clone.data.edit_bones
+
+    # Fallback length for a helper with nothing to copy, scaled off the rig so it
+    # stays visible whatever size the figure is.
+    heights = [eb.head.z for eb in ebones] or [0.0]
+    fallback = ((max(heights) - min(heights))
+                * dict_bones.unreal_helper_bone_length_fraction) or 0.05
+
+    added = []
+    skipped = []
+    for name, parent_name, shadow_name in dict_bones.unreal_helper_bones:
+        existing = _find_either_spelling(ebones, name)
+        if existing is not None:
+            skipped.append(existing.name)
+            continue
+
+        shadow = None
+        if shadow_name is not None:
+            base = shadow_name[:-2] if shadow_name[-2:] in ('.L', '.R') else shadow_name
+            side = shadow_name[-2:] if shadow_name[-2:] in ('.L', '.R') else None
+            shadow = _find_bone(ebones, base, side) if side else ebones.get(base)
+            if shadow is None:
+                print("  helper bones: '{}' shadows '{}' which is not in the rig "
+                      "- skipped".format(name, shadow_name))
+                continue
+
+        eb = ebones.new(name)
+        if shadow is not None:
+            eb.head = shadow.head.copy()
+            eb.tail = eb.head + Vector((0.0, shadow.length or fallback, 0.0))
+            eb.matrix = shadow.matrix.copy()
+        else:
+            eb.head = Vector((0.0, 0.0, 0.0))
+            eb.tail = Vector((0.0, fallback, 0.0))
+
+        # The FBX export runs with use_armature_deform_only=True, which drops any
+        # bone whose use_deform is off. These have no vertex groups but still have
+        # to reach Unreal, so they must be marked deforming or they vanish.
+        eb.use_deform = True
+        eb.use_connect = False
+        parent = _find_either_spelling(ebones, parent_name)
+        if parent is not None:
+            eb.parent = parent
+        added.append(name)
+
+    bpy.ops.object.mode_set(mode='OBJECT')
+    print("  helper bones: added {} {}{}".format(
+        len(added), added, ", already present: %s" % skipped if skipped else ""))
+    return added
+
+
+def orient_bones_for_unreal_from_blender_perfect(armature_clone):
+    """ArmatureBlenderPerfect -> the UE5 export orientation, via BlenderFriendly.
+
+    Four passes, in this order, and the order is load bearing:
+
+        1  BP -> BF                 roll only
+        2  BF -> UE5                +/-90 about each bone's own Z
+        3  foot and ball re-aim     absolute, discards what 1 and 2 did to them
+        4  UE5 roll correction      +180 over EVERY bone, including the feet and
+                                    the Daz extras that steps 1 and 2 skip
+        5  helper bones             the IK markers Manny has and the Daz rig does
+                                    not, copied off the finished deform bones
+
+    Steps 1 and 2 do compose into a single constant per bone, and an earlier
+    version shipped that table. It was removed: 89 stored matrices holding 4
+    distinct values, read by nothing, while the stepped form is what anyone
+    debugging a bad rig actually wants to inspect. Step 4 cannot be folded into
+    step 2 at all - see apply_ue5_roll_correction.
+
+    IMPORTANT: steps 1-3 land on ArmatureUE5 as reconstructed in Blender, which is
+    NOT the state that exports correctly - it sits 180 deg rolled from it. Step 4
+    closes that gap. Anything in this module saying a step "lands on ArmatureUE5"
+    means the reconstruction, not Unreal.
+    """
+    print("orient_bones_for_unreal_from_blender_perfect: {}".format(armature_clone.name))
+    blender_perfect_to_blender_friendly(armature_clone)
+    blender_friendly_to_ue5(armature_clone)
+    # Last, and absolute: it overwrites whatever the two steps did to the feet.
+    reaim_feet_for_unreal(armature_clone)
+    # After the feet, so the correction covers them too - the legacy pass was
+    # the very last thing that touched a roll, and that ordering is load bearing.
+    apply_ue5_roll_correction(armature_clone)
+    # Last, so the markers copy bones that are already in their final orientation
+    # rather than picking up a correction meant for someone else.
+    add_missing_unreal_bones(armature_clone)
+    armature_clone.data[ORIENTATION_PROP] = ORIENTATION_UE5
+
+
 def reorient_bones_for_unreal(armature_clone, armature_object):
+    # LEGACY - for the old VXMod skeleton only. Hand tuned per bone and per bone
+    # group against a rig that predates ArmatureBlenderPerfect, and it goes
+    # straight to something approximating ArmatureUE5. New rigs take
+    # orient_bones_for_unreal_from_blender_perfect instead; this is kept so
+    # existing old-skeleton exports keep working and can be removed once nothing
+    # depends on it.
+    #
     #lets make the bones friendly with Unreal
     #Note: changing the roll of the bone in Blender will rotate the bone on the Green (Y) axis in Unreal
     # Blender Y axis is the Unreal Y axis (green)
@@ -780,295 +1231,6 @@ def reorient_bones_for_unreal(armature_clone, armature_object):
     #
     #we are done with making the bones friendly, lets go back to object mode to also transform the armature as a whole
     bpy.ops.object.mode_set(mode='OBJECT')
-
-
-
-def reorient_bones_for_unreal2(armature_clone, armature_object):
-    #lets make the bones friendly with Unreal
-    #Note: changing the roll of the bone in Blender will rotate the bone on the Green (Y) axis in Unreal
-    # Blender Y axis is the Unreal Y axis (green)
-    # Blender X axis is the Unreal Z axis (blue)
-    # Blender Z axis is the Unreal X axis (red)
-    #
-    # For a start, try to adjust the green axis in Unreal to match what you need, then adjust roll in Blender to match the Unreal axis
-    #
-    bpy.ops.object.mode_set(mode='EDIT', toggle=False)
-    ebones = armature_clone.data.edit_bones
-    #
-    legLeftBones = ['thigh.L', 'calf.L', 'thigh_twist_01.L','thigh_twist_02.L']
-    legRightBones = ['thigh.R', 'calf.R', 'thigh_twist_01.R','thigh_twist_02.R']#, 'hip_twist_end.R']
-    ankleLeftBones=['foot.L']
-    ankleRightBones=['foot.R']
-    ballLeftBones=['ball.L']
-    ballRightBones=['ball.R']
-    clavicleLeftBones =['clavicle.L']
-    clavicleRightBones =['clavicle.R']
-    armLeftBones = [ 'upperarm.L', 'lowerarm.L', 'upperarm_twist_01.L', 'upperarm_twist_02.L', 'lowerarm_twist_01.L', 'lowerarm_twist_02.L']
-    armRightBones = [ 'upperarm.R', 'lowerarm.R', 'upperarm_twist_01.R','upperarm_twist_02.R', 'lowerarm_twist_01.R', 'lowerarm_twist_02.R']
-    handLeftBones = [ 'hand.L']
-    handRightBones = [ 'hand.R']
-    fingerLeftBones=[
-                        'index_metacarpal.L','index_01.L','index_02.L','index_03.L',
-                        'middle_metacarpal.L','middle_01.L','middle_02.L','middle_03.L',
-                        'ring_metacarpal.L','ring_01.L','ring_02.L','ring_03.L',
-                        'pinky_metacarpal.L','pinky_01.L','pinky_02.L','pinky_03.L',
-                        'thumb_01.L','thumb_02.L','thumb_03.L'
-    ]
-    breastLeftBones = ['breast_scale_joint.L','breast_joint01.L','breast_joint02.L','breast_nipple_joint.L','breast_nipple_end.L']
-    breastRightBones = ['breast_scale_joint.R','breast_joint01.R','breast_joint02.R','breast_nipple_joint.R','breast_nipple_end.R']
-    #
-    spineBones = ['spine_01', 'spine_02', 'spine_03', 'spine_04', 'spine_05', 'neck_01', 'neck_02', 'head'] #, 'head_end']
-    #
-    rootBones = ['base']
-    rootBones = []
-    pelvisBones = ['pelvis']
-    #
-    # very important, we need to set the pivot center for rotation/scaling, otherwise we get strange results in armature orientation
-    # it seems we need to go with individual origins or 3d cursor as a pivot point
-    bpy.context.space_data.pivot_point = 'INDIVIDUAL_ORIGINS'
-    #bpy.context.space_data.pivot_point = 'CURSOR'
-    #
-    #
-    for boneName in rootBones:
-        ebone = ebones[boneName]
-        bpy.ops.armature.select_all(action='DESELECT')  # Deselect all bones first
-        ebone.select = True
-        ebone.select_head = True  # Select both head and tail
-        ebone.select_tail = True
-        # Set the 3D cursor to the pelvis bone's head (rotation pivot point)
-        bpy.context.scene.cursor_location = armature_object.matrix_world * ebone.head # 2.79 uses cursor_location
-        # Rotate the selected bone by 90 degrees along the X-axis in local space
-        bpy.ops.transform.rotate(value=math.radians(-90), axis=(1, 0, 0), constraint_axis=(True, False, False), constraint_orientation='LOCAL')
-        ebone.roll +=math.radians(0)
-        # scene.update() removed — single update after all bone loops
-    #
-    for boneName in pelvisBones:
-        ebone = ebones[boneName]
-        bpy.ops.armature.select_all(action='DESELECT')  # Deselect all bones first
-        ebone.select = True
-        ebone.select_head = True  # Select both head and tail
-        ebone.select_tail = True
-        # Set the 3D cursor to the pelvis bone's head (rotation pivot point)
-        bpy.context.scene.cursor_location = armature_object.matrix_world * ebone.head # 2.79 uses cursor_location
-        # Rotate the selected bone by 90 degrees along the X-axis in local space
-        bpy.ops.transform.rotate(value=math.radians(-90), axis=(1, 0, 0), constraint_axis=(True, False, False), constraint_orientation='LOCAL')
-        ebone.roll +=math.radians(180)
-        # scene.update() removed — single update after all bone loops
-    #
-    for boneName in spineBones:
-        ebone = ebones[boneName]
-        bpy.ops.armature.select_all(action='DESELECT')  # Deselect all bones first
-        ebone.select = True
-        ebone.select_head = True  # Select both head and tail
-        ebone.select_tail = True
-        # Set the 3D cursor to the pelvis bone's head (rotation pivot point)
-        bpy.context.scene.cursor_location = armature_object.matrix_world * ebone.head # 2.79 uses cursor_location
-        # Rotate the selected bone by 90 degrees along the X-axis in local space
-        bpy.ops.transform.rotate(value=math.radians(-90), axis=(0, 0, 1), constraint_axis=( False, False, True), constraint_orientation='NORMAL')
-        ebone.roll +=math.radians(180)
-        # scene.update() removed — single update after all bone loops
-    # first lets do the right bones, as those should follow the bone orientation for the right leg
-    for boneName in legRightBones:
-        ebone = ebones[boneName]
-        bpy.ops.armature.select_all(action='DESELECT')  # Deselect all bones first
-        ebone.select = True
-        ebone.select_head = True  # Select both head and tail
-        ebone.select_tail = True
-        # Set the 3D cursor to the bone's head (rotation pivot point)
-        bpy.context.scene.cursor_location = armature_object.matrix_world * ebone.head # 2.79 uses cursor_location
-        # Rotate the selected bone by 90 degrees along the X-axis in local space
-        #bpy.ops.transform.rotate(value=math.radians(-90), axis=(1, 0, 0), constraint_axis=(True, False, False), constraint_orientation='LOCAL')
-        bpy.ops.transform.rotate(value=math.radians(-90), axis=(0, 0, 1), constraint_axis=(False,False,True), constraint_orientation='NORMAL')
-        ebone.roll +=math.radians(180)
-        # scene.update() removed — single update after all bone loops
-    #second lets do the left leg bones, as those should follow the other way, not along the the bones
-    for boneName in legLeftBones:
-        ebone = ebones[boneName]
-        bpy.ops.armature.select_all(action='DESELECT')  # Deselect all bones first
-        ebone.select = True
-        ebone.select_head = True  # Select both head and tail
-        ebone.select_tail = True
-        # Set the 3D cursor to the pelvis bone's head (rotation pivot point)
-        bpy.context.scene.cursor_location = armature_object.matrix_world * ebone.head # 2.79 uses cursor_location
-        # Rotate the selected bone by 90 degrees along the X-axis in local space
-        bpy.ops.transform.rotate(value=math.radians(-90), axis=(0, 0, 1), constraint_axis=(False,False,True), constraint_orientation='NORMAL')
-        ebone.roll +=math.radians(0)
-        # scene.update() removed — single update after all bone loops
-    #
-    for boneName in ankleRightBones:
-        ebone = ebones[boneName]
-        bpy.ops.armature.select_all(action='DESELECT')  # Deselect all bones first
-        ebone.select = True
-        ebone.select_head = True  # Select both head and tail
-        ebone.select_tail = True
-        # Set the 3D cursor to the bone's head (rotation pivot point)
-        bpy.context.scene.cursor_location = armature_object.matrix_world * ebone.head # 2.79 uses cursor_location
-        # Rotate the selected bone by 90 degrees along the X-axis in local space
-        bpy.ops.transform.rotate(value=math.radians(0), axis=(1, 0, 0), constraint_axis=(True, False, False), constraint_orientation='LOCAL')
-        ebone.roll = math.radians(-90)
-        # scene.update() removed — single update after all bone loops
-    for boneName in ankleLeftBones:
-        ebone = ebones[boneName]
-        bpy.ops.armature.select_all(action='DESELECT')  # Deselect all bones first
-        ebone.select = True
-        ebone.select_head = True  # Select both head and tail
-        ebone.select_tail = True
-        # Set the 3D cursor to the bone's head (rotation pivot point)
-        bpy.context.scene.cursor_location = armature_object.matrix_world * ebone.head # 2.79 uses cursor_location
-        # Rotate the selected bone by 90 degrees along the X-axis in local space
-        bpy.ops.transform.rotate(value=math.radians(180), axis=(1, 0, 0), constraint_axis=(True, False, False), constraint_orientation='LOCAL')
-        ebone.roll = math.radians(-90)
-        # scene.update() removed — single update after all bone loops
-    #
-    for boneName in ballLeftBones:
-        ebone = ebones[boneName]
-        bpy.ops.armature.select_all(action='DESELECT')  # Deselect all bones first
-        ebone.select = True
-        ebone.select_head = True  # Select both head and tail
-        ebone.select_tail = True
-        # Set the 3D cursor to the bone's head (rotation pivot point)
-        bpy.context.scene.cursor_location = armature_object.matrix_world * ebone.head # 2.79 uses cursor_location
-        # Rotate the selected bone by 90 degrees along the X-axis in local space
-        bpy.ops.transform.rotate(value=math.radians(-90), axis=(1, 0, 0), constraint_axis=(True, False, False), constraint_orientation='LOCAL')
-        ebone.roll = math.radians(270)
-        # scene.update() removed — single update after all bone loops
-    for boneName in ballRightBones:
-        ebone = ebones[boneName]
-        bpy.ops.armature.select_all(action='DESELECT')  # Deselect all bones first
-        ebone.select = True
-        ebone.select_head = True  # Select both head and tail
-        ebone.select_tail = True
-        # Set the 3D cursor to the bone's head (rotation pivot point)
-        bpy.context.scene.cursor_location = armature_object.matrix_world * ebone.head # 2.79 uses cursor_location
-        # Rotate the selected bone by 90 degrees along the X-axis in local space
-        bpy.ops.transform.rotate(value=math.radians(90), axis=(1, 0, 0), constraint_axis=(True, False, False), constraint_orientation='LOCAL')
-        ebone.roll = math.radians(270)
-        # scene.update() removed — single update after all bone loops
-    #
-    for boneName in clavicleLeftBones:
-        ebone = ebones[boneName]
-        bpy.ops.armature.select_all(action='DESELECT')  # Deselect all bones first
-        ebone.select = True
-        ebone.select_head = True  # Select both head and tail
-        ebone.select_tail = True
-        # Set the 3D cursor to the bone's head (rotation pivot point)
-        bpy.context.scene.cursor_location = armature_object.matrix_world * ebone.head # 2.79 uses cursor_location
-        # Rotate the selected bone by 90 degrees along the X-axis in local space
-        bpy.ops.transform.rotate(value=math.radians(90), axis=(0, 0, 1), constraint_axis=(False, False, True), constraint_orientation='NORMAL')
-        ebone.roll += math.radians(0)
-        # scene.update() removed — single update after all bone loops
-    #
-    for boneName in clavicleRightBones:
-        ebone = ebones[boneName]
-        bpy.ops.armature.select_all(action='DESELECT')  # Deselect all bones first
-        ebone.select = True
-        ebone.select_head = True  # Select both head and tail
-        ebone.select_tail = True
-        # Set the 3D cursor to the bone's head (rotation pivot point)
-        bpy.context.scene.cursor_location = armature_object.matrix_world * ebone.head # 2.79 uses cursor_location
-        bpy.ops.transform.rotate(value=math.radians(90), axis=(0, 0, 1), constraint_axis=(False, False, True), constraint_orientation='NORMAL')
-        ebone.roll += math.radians(180)
-        # scene.update() removed — single update after all bone loops
-    #
-    for boneName in armLeftBones:
-        ebone = ebones[boneName]
-        bpy.ops.armature.select_all(action='DESELECT')  # Deselect all bones first
-        ebone.select = True
-        ebone.select_head = True  # Select both head and tail
-        ebone.select_tail = True
-        # Set the 3D cursor to the bone's head (rotation pivot point)
-        bpy.context.scene.cursor_location = armature_object.matrix_world * ebone.head # 2.79 uses cursor_location
-        # Rotate the selected bone by 90 degrees along the X-axis in local space
-        bpy.ops.transform.rotate(value=math.radians(90), axis=(0, 0, 1), constraint_axis=(False, False, True), constraint_orientation='LOCAL')
-        ebone.roll += math.radians(-90)
-        # scene.update() removed — single update after all bone loops
-    for boneName in armRightBones:
-        ebone = ebones[boneName]
-        bpy.ops.armature.select_all(action='DESELECT')  # Deselect all bones first
-        ebone.select = True
-        ebone.select_head = True  # Select both head and tail
-        ebone.select_tail = True
-        # Set the 3D cursor to the bone's head (rotation pivot point)
-        bpy.context.scene.cursor_location = armature_object.matrix_world * ebone.head # 2.79 uses cursor_location
-        # Rotate the selected bone by 90 degrees along the X-axis in local space
-        bpy.ops.transform.rotate(value=math.radians(90), axis=(0, 0, 1), constraint_axis=(False, False, True), constraint_orientation='LOCAL')
-        ebone.roll += math.radians(-90)
-        # scene.update() removed — single update after all bone loops
-    for boneName in handLeftBones:
-        ebone = ebones[boneName]
-        bpy.ops.armature.select_all(action='DESELECT')  # Deselect all bones first
-        ebone.select = True
-        ebone.select_head = True  # Select both head and tail
-        ebone.select_tail = True
-        # Set the 3D cursor to the bone's head (rotation pivot point)
-        bpy.context.scene.cursor_location = armature_object.matrix_world * ebone.head # 2.79 uses cursor_location
-        #ebone.roll = math.radians(0)
-        # Rotate the selected bone by 90 degrees along the X-axis in local space
-        bpy.ops.transform.rotate(value=math.radians(90), axis=(0, 1, 0), constraint_axis=(False, True, False), constraint_orientation='LOCAL')
-        ebone.roll += math.radians(180)
-        # scene.update() removed — single update after all bone loops
-    for boneName in handRightBones:
-        ebone = ebones[boneName]
-        bpy.ops.armature.select_all(action='DESELECT')  # Deselect all bones first
-        ebone.select = True
-        ebone.select_head = True  # Select both head and tail
-        ebone.select_tail = True
-        # Set the 3D cursor to the bone's head (rotation pivot point)
-        bpy.context.scene.cursor_location = armature_object.matrix_world * ebone.head # 2.79 uses cursor_location
-        #ebone.roll = math.radians(0)
-        # Rotate the selected bone by 90 degrees along the X-axis in local space
-        bpy.ops.transform.rotate(value=math.radians(90), axis=(0, 1, 0), constraint_axis=(False, True, False), constraint_orientation='LOCAL')
-        ebone.roll += math.radians(0)
-        # scene.update() removed — single update after all bone loops
-    #armature_clone.rotation_mode = 'ZXY'
-    for boneName in fingerLeftBones:
-        ebone = ebones[boneName]
-        bpy.ops.armature.select_all(action='DESELECT')  # Deselect all bones first
-        ebone.select = True
-        ebone.select_head = True  # Select both head and tail
-        ebone.select_tail = True
-        # Set the 3D cursor to the bone's head (rotation pivot point)
-        bpy.context.scene.cursor_location = armature_object.matrix_world * ebone.head # 2.79 uses cursor_location
-        #ebone.roll = math.radians(0)
-        # Rotate the selected bone by 90 degrees along the X-axis in local space
-        bpy.ops.transform.rotate(value=math.radians(270), axis=(1, 0, 0), constraint_axis=(True,False,False), constraint_orientation='NORMAL')
-        ebone.roll += math.radians(-90)
-        # scene.update() removed — single update after all bone loops
-    for boneName in breastRightBones:
-        ebone = ebones[boneName]
-        bpy.ops.armature.select_all(action='DESELECT')  # Deselect all bones first
-        ebone.select = True
-        ebone.select_head = True  # Select both head and tail
-        ebone.select_tail = True
-        # Set the 3D cursor to the bone's head (rotation pivot point)
-        bpy.context.scene.cursor_location = armature_object.matrix_world * ebone.head # 2.79 uses cursor_location
-        #ebone.roll = math.radians(0)
-        # Rotate the selected bone by 90 degrees along the X-axis in local space
-        bpy.ops.transform.rotate(value=math.radians(90), axis=(1, 0, 0), constraint_axis=(True, False, False), constraint_orientation='NORMAL')
-        ebone.roll += math.radians(90)
-        # scene.update() removed — single update after all bone loops
-    for boneName in breastLeftBones:
-        ebone = ebones[boneName]
-        bpy.ops.armature.select_all(action='DESELECT')  # Deselect all bones first
-        ebone.select = True
-        ebone.select_head = True  # Select both head and tail
-        ebone.select_tail = True
-        # Set the 3D cursor to the bone's head (rotation pivot point)
-        bpy.context.scene.cursor_location = armature_object.matrix_world * ebone.head # 2.79 uses cursor_location
-        #ebone.roll = math.radians(0)
-        # Rotate the selected bone by 90 degrees along the X-axis in local space
-        bpy.ops.transform.rotate(value=math.radians(90), axis=(1, 0, 0), constraint_axis=(True, False, False), constraint_orientation='NORMAL')
-        ebone.roll += math.radians(-90)
-        # scene.update() removed — single update after all bone loops
-    #
-    # Update the view
-    bpy.context.scene.update()
-    #
-    #
-    #we are done with making the bones friendly, lets go back to object mode to also transform the armature as a whole
-    bpy.ops.object.mode_set(mode='OBJECT')
-
-
 def export_to_unreal_v2(params) : #exportfolderpath,
     #exportfolderpath,exportFilename, includeGeograftsOnExportUnreal, cleanTempMeshesAfterExportUnreal, reorientBonesOnExportUnreal
     #
@@ -1396,10 +1558,17 @@ def export_to_unreal_v2(params) : #exportfolderpath,
     for bone in armature_clone.pose.bones:
         # Remove all constraints from the bone
         while bone.constraints:  # Loop through all constraints
-            bone.constraints.remove(bone.constraints[0])    
+            bone.constraints.remove(bone.constraints[0])
+    #
+    # Back to object mode BEFORE the conditional, not inside it. The transform_apply
+    # calls further down need object mode, and with re-orientation switched off
+    # nothing else would leave pose mode - transform_apply then fails its poll with
+    # "context is incorrect". The animation exporter has always had this guard; this
+    # path did not.
+    bpy.ops.object.mode_set(mode='OBJECT')
     #
     if params.reorientBonesOnExportUnreal:
-        reorient_bones_for_unreal(armature_clone, armature_object)
+        orient_bones_for_unreal(armature_clone, armature_object)
     #
     #if True==True:
     #    return
@@ -1491,6 +1660,11 @@ def export_to_unreal_v2(params) : #exportfolderpath,
     bpy.context.scene.unit_settings.system = 'METRIC'
     #bpy.context.scene.unit_settings.length_unit = 'CENTIMETERS'  # You can also set 'CENTIMETERS'
     bpy.context.scene.unit_settings.scale_length = 0.01
+
+    # .L/.R -> _l/_r, last thing before the FBX is written. The LOD meshes had
+    # their armature modifier retargeted to the clone above, so their vertex
+    # groups get renamed along with the bones.
+    rename_bones_for_unreal(armature_clone)
 
     #fbx export:
     emptyLodGroup.select=True
@@ -1658,7 +1832,7 @@ def export_animation_to_unreal(params):
 
     # --- Bone reorientation ---
     if params.reorientBonesOnExportUnreal:
-        reorient_bones_for_unreal(armature_clone, armature_object)
+        orient_bones_for_unreal(armature_clone, armature_object)
 
     # --- Add Copy Transforms constraints for animation retargeting ---
     deselect_all_objects()
@@ -1697,6 +1871,12 @@ def export_animation_to_unreal(params):
     armature_clone.scale = Vector((100, 100, 100))
     bpy.ops.object.transform_apply(scale=True)
     armature_clone.name = 'root'
+
+    # .L/.R -> _l/_r. Deliberately AFTER the bake: the retarget constraints above
+    # resolve `subtarget` against the original armature, which still carries the
+    # Blender names, so renaming any earlier would silently produce an empty
+    # animation.
+    rename_bones_for_unreal(armature_clone)
 
     # --- FBX Export ---
     bpy.context.scene.unit_settings.system = 'METRIC'

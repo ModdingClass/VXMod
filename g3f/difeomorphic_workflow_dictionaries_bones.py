@@ -716,6 +716,188 @@ bones_that_must_be_kept = [
 ]
 
 
+# ---------------------------------------------------------------------------
+# BlenderPerfect roll deltas
+# ---------------------------------------------------------------------------
+#
+# Degrees to ADD to whatever roll Diffeomorphic delivers, to reach the working
+# convention: X on the joint's natural hinge, so flexion is a positive rotation
+# about X and you can pose a limb on one axis.
+#
+# Measured once with vxmod.report_roll_rule_deltas against a real G3F rig, then
+# frozen here. Deriving hinges at runtime was tried and abandoned: it needs a
+# cross product of two nearly parallel bones, and on G3F the ring and pinky have
+# only 0.82 and 0.57 degrees of rest bend, which made adjacent fingers disagree
+# by 87 degrees. Frozen numbers have no such failure mode.
+#
+# The headline result is that Diffeomorphic is ALREADY in the convention almost
+# everywhere, so this table is deliberately tiny - a bone with no entry keeps its
+# Daz roll, which is the correct answer for it, not a placeholder:
+#
+#   spine, neck, head, pelvis   0.000 deg from the rule, to three decimals
+#   thigh / calf                within 2.3 and 7.2 deg, rounds to 0
+#   upperarm / lowerarm         rounds to 0; confirmed by eye that Z already
+#                               points away from where the elbow pole belongs
+#   fingers                     kept as Daz delivers them - all four sit at
+#                               about -175, so they are at least self consistent,
+#                               and the measured hinges were too noisy to trust
+#   clavicle                    the one bone genuinely out of step
+#
+# Deltas MUST mirror between sides, because the Daz rolls do (thigh.L -6.819 vs
+# thigh.R +6.819). A non-mirrored delta would silently break left/right symmetry.
+# Empty is the expected state, not an oversight. Every bone that needed an offset
+# turned out to need zero - Diffeomorphic already delivers the convention - and
+# the two that did not (clavicle, hand) are handled by aiming and by a hinge
+# below, which adapt per rig instead of assuming G3F proportions. Kept as the
+# documented place to put a per-bone offset if one ever proves necessary.
+blender_perfect_roll_deltas = {
+}
+
+# Bones whose roll is set by AIMING rather than by a delta: the value is the
+# direction the bone's secondary axis (Blender local Z) should point, in armature
+# space, fed to EditBone.align_roll.
+#
+# Only the clavicle needs this. It has no hinge to derive a roll from, so it was
+# briefly a hand-measured +/-90; aiming is better because it is rig-intrinsic and
+# adapts to whatever shoulder angle a figure has. Verified against the UE5
+# reference, where "secondary axis toward the front of the character" reproduces
+# Epic's clavicle roll to 0.184 deg. Aiming at the upperarm's own secondary axis
+# instead - the obvious guess - is 3.256 deg out, because the upper arm sits
+# 3.64 deg off pure front.
+#
+# Unlike a hinge, this is numerically safe: aiming at a fixed world direction has
+# no near-parallel cancellation to worry about.
+#
+# The clavicle already points at its child in the built rig (0.0000 deg), so the
+# direction needs nothing - only the roll.
+FRONT = (0.0, -1.0, 0.0)
+
+blender_perfect_roll_axis_targets = {
+    "clavicle.L": FRONT,
+    "clavicle.R": FRONT,
+}
+
+# Bones whose X axis is a HINGE derived from two bone directions:
+#   bone -> (bone A, bone B, sign)   ->   X = sign * normalize(dir(A) x dir(B))
+#
+# Only the hand needs this. The wrist is 2-DOF, but flexion/extension is clearly
+# the primary axis - the motion of slapping a ball toward the ground - and like
+# any hinge it is perpendicular to both segments it joins. Verified against the
+# UE5 reference: Manny's hand X sits 89.51 deg from the forearm, i.e. exactly
+# perpendicular, and this rule lands 2.5 deg from Epic's roll.
+#
+# The obvious alternative, aiming along the knuckles, was measured and rejected:
+# it comes out 178 deg wrong and is not even mirrored between the two hands
+# (-97.9 / -82.1), so it would need a per-side sign flip. The hinge form is
+# mirrored for free (+86.5 / -86.5), matching the reference's +84.0 / -84.0.
+#
+# Order matters. For the knee the bone being rolled is the PARENT and the hinge
+# is parent x child; here the bone being rolled is the CHILD, so it is hand x
+# forearm. Flexion has to stay a positive rotation either way.
+blender_perfect_hinge_rules = {
+    "hand.L": ("hand.L", "lowerarm.L", +1.0),
+    "hand.R": ("hand.R", "lowerarm.R", +1.0),
+    # The thumb is opposable, so it does NOT share the finger plane - aiming it
+    # along the knuckle line is 85 deg wrong. Its own joint gives 17.6 deg from
+    # Manny, and the rest bend is 21.7 deg on G3F, well clear of the guard.
+    "thumb_01.L": ("thumb_01.L", "thumb_02.L", +1.0),
+    "thumb_02.L": ("thumb_01.L", "thumb_02.L", +1.0),
+    "thumb_03.L": ("thumb_01.L", "thumb_02.L", +1.0),
+    "thumb_01.R": ("thumb_01.R", "thumb_02.R", +1.0),
+    "thumb_02.R": ("thumb_01.R", "thumb_02.R", +1.0),
+    "thumb_03.R": ("thumb_01.R", "thumb_02.R", +1.0),
+}
+
+# Fingers: X aimed along the line across the knuckles, from the index metacarpal
+# to the pinky metacarpal.
+#
+#   (bones to roll, from bone, to bone, sign)   X = sign * normalize(to.head - from.head)
+#
+# This exists because Unreal's "compatible skeleton" playback applies Manny's
+# LOCAL bone rotations to ours by name, so any bone whose reference orientation
+# differs from Manny's plays back wrong. Everything else in the rig is within a
+# few degrees; the fingers, left on their Daz rolls, were 80-102 deg out, which
+# is why retargeted clips wrecked the hands while posing looked fine.
+#
+# Measured against Manny: median 11.2 deg, max 26.3 (middle 0.6, index 11,
+# ring 11, pinky 25). The fan toward the pinky is real - Manny's little finger
+# curls at an angle to the index - and could be closed by per-finger constants
+# measured off Manny, at the cost of baking Manny's anatomy into a Daz rig.
+#
+# Deriving each finger's own hinge was tried and rejected: G3F's ring and pinky
+# have 0.82 and 0.57 deg of rest bend, and adjacent fingers came out 87 deg
+# apart. The knuckle line is a long, well-conditioned vector with no such
+# failure mode.
+#
+# The sign is per side and cannot be folded away - the two hands are not mirrors
+# of each other in this respect.
+_LEFT_FINGERS = [f + p + '.L' for f in ('index', 'middle', 'ring', 'pinky')
+                 for p in ('_metacarpal', '_01', '_02', '_03')]
+_RIGHT_FINGERS = [n[:-2] + '.R' for n in _LEFT_FINGERS]
+
+blender_perfect_knuckle_rules = [
+    (_LEFT_FINGERS,  "index_metacarpal.L", "pinky_metacarpal.L", +1.0),
+    (_RIGHT_FINGERS, "index_metacarpal.R", "pinky_metacarpal.R", -1.0),
+]
+
+# Below this the two directions are too close to parallel for the cross product
+# to mean anything, so the bone is left alone and reported rather than given a
+# confidently wrong axis. Manny's wrist bend is 11.08 deg for reference.
+minimum_hinge_bend_degrees = 2.0
+
+# Twist bones take their parent's roll rather than a table entry - they share the
+# parent's axis by definition, so a separate value could only ever disagree.
+# This also sidesteps a caching trap: setupTwistBones creates the missing twists
+# AFTER the first roll pass, so any baseline captured for them is the parent's
+# already-adjusted roll, not a Daz roll.
+twist_bone_name_marker = "_twist_"
+
+
+# ---------------------------------------------------------------------------
+# Unreal helper bones the Daz rig does not have
+# ---------------------------------------------------------------------------
+#
+# Manny carries ten bones the builder never creates: the IK markers, plus
+# interaction and center_of_mass. They deform nothing, but Unreal's retarget and
+# IK setups expect them, so the exporter adds them to the clone.
+#
+# Measured from bone_data.csv, they are not placed arbitrarily - each one shadows
+# a deform bone:
+#
+#   ik_foot_root, ik_hand_root, interaction, center_of_mass   exactly on root
+#   ik_foot_l / ik_foot_r        0.0312 from foot_l / foot_r
+#   ik_hand_l / ik_hand_r        0.2157 from hand_l / hand_r
+#   ik_hand_gun                  0.2157 from hand_r  (it shadows the RIGHT hand)
+#
+# Those residuals are Epic's own authoring slop, well under a millimetre, so
+# copying the shadowed bone exactly is both simpler and arguably tidier than
+# reproducing them. Orientation is copied too: Epic's differs by ~3 deg on the
+# feet and ~12 deg on the hands, which is inside the tolerance everything else
+# here works to, and copying keeps the marker agreeing with the bone it marks.
+#
+# `root` is deliberately absent. The Blender FBX exporter synthesises the root
+# from the armature object, so creating one here would produce two.
+#
+# Order matters: parents are listed before their children.
+#
+#   (bone, parent, bone whose position and orientation to copy or None for the origin)
+unreal_helper_bones = [
+    ("ik_foot_root",   "root",         None),
+    ("ik_foot_l",      "ik_foot_root", "foot.L"),
+    ("ik_foot_r",      "ik_foot_root", "foot.R"),
+    ("ik_hand_root",   "root",         None),
+    ("ik_hand_gun",    "ik_hand_root", "hand.R"),
+    ("ik_hand_l",      "ik_hand_gun",  "hand.L"),
+    ("ik_hand_r",      "ik_hand_gun",  "hand.R"),
+    ("interaction",    "root",         None),
+    ("center_of_mass", "root",         None),
+]
+
+# Length for a helper with nothing to copy, as a fraction of the rig's height, so
+# it stays visible whatever scale the figure is built at.
+unreal_helper_bone_length_fraction = 0.05
+
+
 def getMannyBoneRenameMap():
     """
     The single source of truth for Daz -> Manny naming.

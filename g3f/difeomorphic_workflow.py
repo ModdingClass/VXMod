@@ -22,11 +22,75 @@ from ..g3f.difeomorphic_workflow_armature_from_breast_vertices import *
 
 from ..helper_vgroups import *
 
+from ..g3f import manny_blender_perfect_generated as manny_bp
+
 if "bpy" in locals():
     import imp
     imp.reload(dict_bones)
+    imp.reload(manny_bp)
 else:
     from ..g3f import difeomorphic_workflow_dictionaries_bones as dict_bones
+    from ..g3f import manny_blender_perfect_generated as manny_bp
+
+# Orientation stamp, so the exporter can tell a BlenderPerfect rig from the old
+# VXMod skeleton and pick the right conversion. Kept in step with
+# io_unreal_dump_importer/manny_roll_convention.py.
+ORIENTATION_PROP = "vx_orientation"
+ORIENTATION_BP = "BP"
+ORIENTATION_UE5 = "UE5"
+# The builder's output with rolls exactly as Diffeomorphic delivered them. Only
+# reachable by toggling the BlenderPerfect rolls back off, for comparison.
+ORIENTATION_DAZ = "DAZ"
+
+# Per-bone cache of the roll a bone had before applyBlenderPerfectRolls first
+# touched it, so the toggle can put it back. Written on the EditBone: Blender
+# copies custom properties both ways across an edit-mode round trip, so the value
+# is readable as bone[...] in object mode and eb[...] in edit mode.
+ROLL_CACHE_PROP = "roll_before_bp"
+
+
+def _wrapDegrees(degrees):
+    """Into (-180, 180]. Blender never does this itself, which is how you end up
+    reading -261.98 in the N panel instead of +98.02."""
+    wrapped = math.fmod(degrees, 360.0)
+    if wrapped <= -180.0:
+        wrapped += 360.0
+    elif wrapped > 180.0:
+        wrapped -= 360.0
+    return wrapped
+
+
+def _beginEditBones(armature_object):
+    """Get at edit_bones while disturbing the user's mode as little as possible.
+
+    If the armature is already the object being edited, nothing changes at all
+    and the caller stays in edit mode - which is what lets the roll toggle be
+    used while posing bones. Otherwise the previous active object and mode are
+    captured so _endEditBones can put them back.
+
+    Returns a token for _endEditBones, or None if nothing was changed."""
+    scene = bpy.context.scene
+    active = scene.objects.active
+    if active is armature_object and armature_object.mode == 'EDIT':
+        return None
+
+    previous = (active, active.mode if active is not None else 'OBJECT')
+    if active is not None and active.mode != 'OBJECT':
+        bpy.ops.object.mode_set(mode='OBJECT')
+    scene.objects.active = armature_object
+    bpy.ops.object.mode_set(mode='EDIT')
+    return previous
+
+
+def _endEditBones(token):
+    if token is None:
+        return
+    previous_active, previous_mode = token
+    bpy.ops.object.mode_set(mode='OBJECT')
+    if previous_active is not None:
+        bpy.context.scene.objects.active = previous_active
+        if previous_mode != 'OBJECT':
+            bpy.ops.object.mode_set(mode=previous_mode)
 
 def alignArmatureFromDifeomorphicToManny():
     """
@@ -228,6 +292,13 @@ def alignArmatureFromDifeomorphicToManny():
     clamped = clampBoneLengthsToChildHeads(vx_armature)
 
     bpy.ops.object.mode_set(mode='OBJECT')
+
+    # ------------------------------------------------- BlenderPerfect rolls
+    # Heads and tails are final by this point, so roll is the only remaining
+    # degree of freedom. Twist bones created later by setupTwistBones inherit
+    # their parent's roll, so they come out correct too - and the full pipeline
+    # calls this again at the end anyway, which is safe because it is idempotent.
+    applyBlenderPerfectRolls(vx_armature)
 
     # ------------------------------------------------------------------ report
     renamed_count = sum(1 for n in created if n in rename_map)
@@ -931,11 +1002,386 @@ def switchVertexGroupsToManny(mesh_object, armature_object=None, delete_unmapped
     return (renamed, merged, leftover)
 
 
+def applyBlenderPerfectRolls(vx_armature=None, verbose=True):
+    """
+    Put the rig into ArmatureBlenderPerfect orientation - the convention all
+    Blender work happens in, and the one the exporter converts out of.
+
+    Under it every joint flexes about its local +X, the spine/neck/head sit at
+    roll 0, left and right mirror the way Blender's Symmetrize expects, and the
+    IK pole angle is -90 everywhere with the pole on its natural side (in front
+    of the knee, behind the elbow).
+
+    Only ROLL is touched. Heads, tails, lengths, parenting and the bone set are
+    left exactly as the builder placed them.
+
+    Diffeomorphic already delivers this convention almost everywhere - the spine
+    column is exact to three decimals, the legs are within a couple of degrees,
+    and the arms were confirmed by eye - so the table in
+    difeomorphic_workflow_dictionaries_bones is deliberately tiny. A bone with no
+    entry keeps its Daz roll because that IS the right answer for it.
+
+    Idempotent in practice: re-running re-adds the delta, so it is guarded by the
+    orientation stamp rather than by the arithmetic. Safe to call again after
+    setupTwistBones, which is why the pipeline does - freshly created twists need
+    to pick up their parent's roll.
+    """
+    if vx_armature is None:
+        vx_armature = bpy.data.objects.get("Armature")
+    if vx_armature is None or vx_armature.type != 'ARMATURE':
+        print("applyBlenderPerfectRolls: no armature named 'Armature' found")
+        return {'CANCELLED'}
+
+    # A delta ADDS, so applying it twice would double it. The stamp is the guard:
+    # on a rig already in BP only the twist inheritance re-runs, which is what the
+    # second call in the pipeline is actually for.
+    already_bp = vx_armature.data.get(ORIENTATION_PROP) == ORIENTATION_BP
+
+    token = _beginEditBones(vx_armature)
+
+    adjusted = []
+    for eb in ([] if already_bp else vx_armature.data.edit_bones):
+        delta = dict_bones.blender_perfect_roll_deltas.get(eb.name)
+        if not delta:
+            continue
+        # First write wins, so calling this twice (the pipeline does) keeps the
+        # original Daz roll rather than caching the adjusted one over it.
+        if eb.get(ROLL_CACHE_PROP) is None:
+            eb[ROLL_CACHE_PROP] = math.degrees(eb.roll)
+        eb.roll = radians(_wrapDegrees(math.degrees(eb.roll) + delta))
+        adjusted.append(eb.name)
+
+    # Bones aimed rather than offset. Absolute, so unlike a delta this is safe to
+    # re-apply and does not need the already_bp guard.
+    aimed = []
+    for eb in vx_armature.data.edit_bones:
+        target = dict_bones.blender_perfect_roll_axis_targets.get(eb.name)
+        if target is None:
+            continue
+        if eb.get(ROLL_CACHE_PROP) is None:
+            eb[ROLL_CACHE_PROP] = math.degrees(eb.roll)
+        eb.align_roll(Vector(target))
+        aimed.append(eb.name)
+
+    # Bones whose X is a hinge derived from two bone directions. Also absolute.
+    hinged = []
+    for name, (a_name, b_name, sign) in sorted(
+            dict_bones.blender_perfect_hinge_rules.items()):
+        eb = vx_armature.data.edit_bones.get(name)
+        a = vx_armature.data.edit_bones.get(a_name)
+        b = vx_armature.data.edit_bones.get(b_name)
+        if eb is None or a is None or b is None:
+            print("  WARNING: hinge rule for '{}' needs {} and {} - skipped"
+                  .format(name, a_name, b_name))
+            continue
+        da = (a.tail - a.head).normalized()
+        db = (b.tail - b.head).normalized()
+        bend = math.degrees(da.angle(db))
+        if bend < dict_bones.minimum_hinge_bend_degrees:
+            print("  WARNING: '{}' hinge is only {:.2f} deg of bend - left on its "
+                  "own roll rather than guessed".format(name, bend))
+            continue
+        if eb.get(ROLL_CACHE_PROP) is None:
+            eb[ROLL_CACHE_PROP] = math.degrees(eb.roll)
+        axis = da.cross(db).normalized() * sign
+        eb.align_roll(axis.cross((eb.tail - eb.head).normalized()))
+        hinged.append(eb.name)
+
+    # Fingers: X along the knuckle line. Uses bone HEADS, so unlike the hinge
+    # rules it is immune to how straight the finger happens to be.
+    knuckled = []
+    for members, from_name, to_name, sign in dict_bones.blender_perfect_knuckle_rules:
+        a = vx_armature.data.edit_bones.get(from_name)
+        b = vx_armature.data.edit_bones.get(to_name)
+        if a is None or b is None:
+            print("  WARNING: knuckle rule needs {} and {} - {} bones skipped"
+                  .format(from_name, to_name, len(members)))
+            continue
+        across = (b.head - a.head)
+        if across.length < 1e-6:
+            print("  WARNING: {} and {} are in the same place - {} bones skipped"
+                  .format(from_name, to_name, len(members)))
+            continue
+        axis = across.normalized() * sign
+        for name in members:
+            eb = vx_armature.data.edit_bones.get(name)
+            if eb is None:
+                continue
+            if eb.get(ROLL_CACHE_PROP) is None:
+                eb[ROLL_CACHE_PROP] = math.degrees(eb.roll)
+            eb.align_roll(axis.cross((eb.tail - eb.head).normalized()))
+            knuckled.append(name)
+
+    # Twists share their parent's axis by definition, so they follow rather than
+    # carry their own value. Done after the table so a parent that moved takes
+    # its twists with it.
+    twisted = 0
+    for eb in vx_armature.data.edit_bones:
+        if dict_bones.twist_bone_name_marker not in eb.name or eb.parent is None:
+            continue
+        if eb.get(ROLL_CACHE_PROP) is None:
+            eb[ROLL_CACHE_PROP] = math.degrees(eb.roll)
+        eb.roll = eb.parent.roll
+        twisted += 1
+
+    _endEditBones(token)
+
+    vx_armature.data[ORIENTATION_PROP] = ORIENTATION_BP
+
+    if verbose:
+        print("applyBlenderPerfectRolls: {} offset {}, {} aimed {}, {} hinged {}, "
+              "{} knuckle-aligned, {} twists took their parent's roll, everything "
+              "else kept its Daz roll{}"
+              .format(len(adjusted), sorted(adjusted), len(aimed), sorted(aimed),
+                      len(hinged), sorted(hinged), len(knuckled), twisted,
+                      " (already BP, offsets skipped)" if already_bp else ""))
+        missing = sorted((set(dict_bones.blender_perfect_roll_deltas)
+                          | set(dict_bones.blender_perfect_roll_axis_targets))
+                         - set(b.name for b in vx_armature.data.bones))
+        if missing:
+            print("  WARNING: table entries with no such bone: {}".format(missing))
+    return {'FINISHED'}
+
+
+def _rollRuleGroups(edit_bones):
+    """The intrinsic definition of a 'perfect' roll, as bone -> (hinge source).
+
+    X is the joint's natural hinge, so flexion is a positive rotation about X.
+    Where a hinge can be measured from the rig's own rest pose we use it; the
+    spine column has no bend to measure, so its hinge is simply the body's
+    left/right axis, which makes forward bending +X.
+
+    A limb shares one hinge along its whole chain - the knee plane drives thigh,
+    calf and their twists; the elbow plane drives upperarm, lowerarm and theirs -
+    which is what keeps the limb planar and the IK solver happy. Verified against
+    the UE5 reference rig, where this reproduces Epic's own rolls to 0.000 deg for
+    legs, arms and spine.
+
+    Bones with no entry (foot, ball, hand, clavicle and every Daz extra) are
+    deliberately absent: they have no natural hinge, so their Daz roll stands."""
+    groups = []
+    for side in ('.L', '.R'):
+        groups.append((('thigh' + side, 'calf' + side),
+                       ['thigh' + side, 'calf' + side,
+                        'thigh_twist_01' + side, 'thigh_twist_02' + side,
+                        'calf_twist_01' + side, 'calf_twist_02' + side]))
+        groups.append((('upperarm' + side, 'lowerarm' + side),
+                       ['upperarm' + side, 'lowerarm' + side,
+                        'upperarm_twist_01' + side, 'upperarm_twist_02' + side,
+                        'lowerarm_twist_01' + side, 'lowerarm_twist_02' + side]))
+        for finger in ('index', 'middle', 'ring', 'pinky'):
+            groups.append(((finger + '_01' + side, finger + '_02' + side),
+                           [finger + '_metacarpal' + side, finger + '_01' + side,
+                            finger + '_02' + side, finger + '_03' + side]))
+        groups.append((('thumb_01' + side, 'thumb_02' + side),
+                       ['thumb_01' + side, 'thumb_02' + side, 'thumb_03' + side]))
+    spine = ['pelvis', 'spine_01', 'spine_02', 'spine_03', 'spine_04', 'spine_05',
+             'neck_01', 'neck_02', 'head']
+    groups.append((None, [n for n in spine if n in edit_bones]))
+    return groups
+
+
+def _rollAimGroups():
+    """Bones whose rule is 'aim the secondary axis', not 'X on a hinge'."""
+    return dict(dict_bones.blender_perfect_roll_axis_targets)
+
+
+def _boneDirection(eb):
+    return (eb.tail - eb.head).normalized()
+
+
+def reportRollRuleDeltas(vx_armature=None, min_bend_degrees=0.5):
+    """Print, per bone, how far the Diffeomorphic roll is from the rule.
+
+    Run this ONCE on a rig in its Daz state. The point is the 'delta' column: if
+    those land on multiples of 90 they can be frozen into a hardcoded table and
+    applied blindly to any G3F-generation rig, with no geometry needed at
+    runtime - which also removes the conditioning problem, since a knee with only
+    a degree of rest bend is a poor basis for a cross product.
+
+    'off90' is the distance from the nearest multiple of 90. Small values mean the
+    delta is safe to freeze; large ones mean that bone genuinely needs deciding.
+    """
+    if vx_armature is None:
+        vx_armature = bpy.data.objects.get("Armature")
+    if vx_armature is None or vx_armature.type != 'ARMATURE':
+        print("reportRollRuleDeltas: no armature named 'Armature' found")
+        return {'CANCELLED'}
+
+    token = _beginEditBones(vx_armature)
+    ebones = vx_armature.data.edit_bones
+    rows = []
+    weak = []
+    for hinge_source, members in _rollRuleGroups(ebones):
+        if hinge_source is None:
+            hinge = Vector((1.0, 0.0, 0.0))          # body left/right
+            bend = None
+        else:
+            parent_name, child_name = hinge_source
+            if parent_name not in ebones or child_name not in ebones:
+                continue
+            pd = _boneDirection(ebones[parent_name])
+            cd = _boneDirection(ebones[child_name])
+            bend = math.degrees(pd.angle(cd))
+            if bend < min_bend_degrees:
+                weak.append((parent_name, bend))
+                continue
+            hinge = pd.cross(cd).normalized()
+        for name in members:
+            eb = ebones.get(name)
+            if eb is None:
+                continue
+            keep = eb.roll
+            daz = math.degrees(keep)
+            eb.align_roll(hinge.cross(_boneDirection(eb)).normalized())
+            perfect = math.degrees(eb.roll)
+            eb.roll = keep
+            delta = ((perfect - daz) + 180.0) % 360.0 - 180.0
+            nearest = round(delta / 90.0) * 90.0
+            rows.append((name, daz, perfect, delta, nearest,
+                         abs(delta - nearest), bend))
+    def _record(name, target_z, bend):
+        eb = ebones.get(name)
+        if eb is None:
+            return
+        keep = eb.roll
+        daz = math.degrees(keep)
+        eb.align_roll(target_z)
+        perfect = math.degrees(eb.roll)
+        eb.roll = keep
+        delta = ((perfect - daz) + 180.0) % 360.0 - 180.0
+        nearest = round(delta / 90.0) * 90.0
+        rows.append((name, daz, perfect, delta, nearest, abs(delta - nearest), bend))
+
+    # aimed bones: the rule is a direction for the secondary axis, not a hinge
+    for name, target in sorted(_rollAimGroups().items()):
+        _record(name, Vector(target), None)
+
+    # fingers aimed along the knuckle line
+    for members, from_name, to_name, sign in dict_bones.blender_perfect_knuckle_rules:
+        a, b = ebones.get(from_name), ebones.get(to_name)
+        if a is None or b is None or (b.head - a.head).length < 1e-6:
+            continue
+        axis = (b.head - a.head).normalized() * sign
+        for name in members:
+            eb = ebones.get(name)
+            if eb is not None:
+                _record(name, axis.cross(_boneDirection(eb)), None)
+
+    # hinge-derived bones (the wrist and the thumb)
+    for name, (a_name, b_name, sign) in sorted(
+            dict_bones.blender_perfect_hinge_rules.items()):
+        eb, a, b = ebones.get(name), ebones.get(a_name), ebones.get(b_name)
+        if eb is None or a is None or b is None:
+            continue
+        da = _boneDirection(a)
+        db = _boneDirection(b)
+        bend = math.degrees(da.angle(db))
+        if bend < dict_bones.minimum_hinge_bend_degrees:
+            weak.append((name, bend))
+            continue
+        axis = da.cross(db).normalized() * sign
+        _record(name, axis.cross(_boneDirection(eb)), bend)
+
+    unruled = sorted(eb.name for eb in ebones
+                     if eb.name not in [r[0] for r in rows])
+    _endEditBones(token)
+
+    print("")
+    print("=== roll rule report for {} ===".format(vx_armature.name))
+    print("    X = the joint's natural hinge, so flexion is +X")
+    print("")
+    print("  %-24s %9s %9s %9s %8s %7s %7s"
+          % ("bone", "daz", "rule", "delta", "near90", "off90", "bend"))
+    for name, daz, perfect, delta, nearest, off, bend in rows:
+        print("  %-24s %+9.3f %+9.3f %+9.3f %+8.0f %7.3f %7s"
+              % (name, daz, perfect, delta, nearest, off,
+                 "-" if bend is None else "%.2f" % bend))
+    if rows:
+        worst = max(rows, key=lambda r: r[5])
+        print("")
+        print("  worst distance from a multiple of 90: %.3f deg on %s"
+              % (worst[5], worst[0]))
+    if weak:
+        print("  joints too straight to give a reliable hinge (<%.2f deg), skipped: %s"
+              % (min_bend_degrees, weak))
+    print("  no rule, Daz roll stands (%d): %s" % (len(unruled), unruled))
+    print("")
+    return {'FINISHED'}
+
+
+def restoreDazRolls(vx_armature=None, verbose=True):
+    """Put every roll back to what Diffeomorphic delivered, for comparison.
+
+    Reads the per-bone cache applyBlenderPerfectRolls left behind. Rolls only, so
+    the rig is otherwise untouched and toggling back and forth is lossless.
+
+    The armature is stamped DAZ afterwards, which the exporter refuses to convert
+    - a rig in this state would get BlenderPerfect export constants applied to Daz
+    rolls and come out wrong in every joint.
+    """
+    if vx_armature is None:
+        vx_armature = bpy.data.objects.get("Armature")
+    if vx_armature is None or vx_armature.type != 'ARMATURE':
+        print("restoreDazRolls: no armature named 'Armature' found")
+        return {'CANCELLED'}
+
+    token = _beginEditBones(vx_armature)
+    restored = 0
+    for eb in vx_armature.data.edit_bones:
+        cached = eb.get(ROLL_CACHE_PROP)
+        if cached is None:
+            continue
+        eb.roll = radians(cached)
+        restored += 1
+    _endEditBones(token)
+
+    if restored == 0:
+        print("restoreDazRolls: no cached rolls on {} - has "
+              "applyBlenderPerfectRolls run on it?".format(vx_armature.name))
+        return {'CANCELLED'}
+
+    vx_armature.data[ORIENTATION_PROP] = ORIENTATION_DAZ
+    if verbose:
+        print("restoreDazRolls: restored {} rolls on {}"
+              .format(restored, vx_armature.name))
+    return {'FINISHED'}
+
+
+def toggleBlenderPerfectRolls(vx_armature=None):
+    """Flip between the BlenderPerfect rolls and the original Daz ones.
+
+    Only rolls move, so nothing else about the rig changes and you can flip as
+    often as you like to see the difference."""
+    if vx_armature is None:
+        vx_armature = bpy.data.objects.get("Armature")
+    if vx_armature is None or vx_armature.type != 'ARMATURE':
+        print("toggleBlenderPerfectRolls: no armature named 'Armature' found")
+        return {'CANCELLED'}, None
+
+    state = vx_armature.data.get(ORIENTATION_PROP)
+    if state == ORIENTATION_UE5:
+        print("toggleBlenderPerfectRolls: {} is in UE5 orientation, not a roll "
+              "difference - nothing to toggle".format(vx_armature.name))
+        return {'CANCELLED'}, state
+    if state == ORIENTATION_BP:
+        return restoreDazRolls(vx_armature), ORIENTATION_DAZ
+    return applyBlenderPerfectRolls(vx_armature), ORIENTATION_BP
+
+
 def reorientArmatureFromDifeomorphicToManny(vx_armature=None):
     """
-    NOT IMPLEMENTED YET - deliberately left as a stub.
+    SUPERSEDED by applyBlenderPerfectRolls above - kept for the research notes.
 
-    This is the second half of DazToUnreal's ConvertToEpicSkeleton: the
+    Porting DazToUnreal's re-orientation pass turned out to be unnecessary. It
+    solves a problem this pipeline does not have: DazToUnreal has to fix bone
+    DIRECTIONS, because it inherits whatever Daz hands it. Here the builder
+    already places every head and tail, so direction is correct and roll is the
+    only remaining degree of freedom - which makes a per-bone roll table a
+    complete orientation fix.
+
+    What the DazToUnreal pass did, for reference. It is the second half of
+    ConvertToEpicSkeleton: the
     re-orientation pass at DazToUnrealBlueprintUtils.cpp:369-527. It changes bone
     ORIENTATION only; alignArmatureFromDifeomorphicToManny above already handles
     naming, hierarchy and position.
@@ -968,7 +1414,8 @@ def reorientArmatureFromDifeomorphicToManny(vx_armature=None):
         D:\\code\\DazToUnreal\\blender_reference\\g3f_bone_transforms.json
         D:\\code\\DazToUnreal\\blender_reference\\G3F_bone_transforms.md
     """
-    print("reorientArmatureFromDifeomorphicToManny: not implemented yet")
+    print("reorientArmatureFromDifeomorphicToManny: superseded by "
+          "applyBlenderPerfectRolls")
     return {'CANCELLED'}
 
 
