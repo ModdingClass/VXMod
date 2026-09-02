@@ -249,6 +249,43 @@ class VXMOD_vars(bpy.types.PropertyGroup) :
         description="If pinned, the selected mesh won’t change when you change the active object",
         default=False
     )
+    #
+    # --- Per-bone feature toggles read by "Manny FULL" -------------------------
+    # One flag per side on purpose, so a feature can be A/B'd on a single figure:
+    # build with it on for the left and off for the right and compare in place,
+    # rather than exporting twice and flipping between files.
+    pectoralWeightModeItems = [
+        ('AXIAL', "Linear",
+         "Project each vertex onto the bone axis. Distance off the axis is ignored, "
+         "so the underside and the topside of the breast hand over together"),
+        ('RADIAL', "Radial",
+         "Use straight-line distance from the chest wall, i.e. spherical shells. "
+         "Follows the breast's shape more closely, but a vertex far off the axis "
+         "reads as further along than the linear version says it is"),
+    ]
+    pectoralWeightModeL = bpy.props.EnumProperty(
+        name="L",
+        description="How the left pectoral's weights are handed from joint02 to joint03",
+        items=pectoralWeightModeItems,
+        default='AXIAL',
+    )
+    pectoralWeightModeR = bpy.props.EnumProperty(
+        name="R",
+        description="How the right pectoral's weights are handed from joint02 to joint03",
+        items=pectoralWeightModeItems,
+        default='AXIAL',
+    )
+    pectoralRodAngle = bpy.props.FloatProperty(
+        name="Rod angle",
+        description="Degrees the fishing rod is tilted UP from the pectoral_base -> "
+                    "nipple line. The line length is not separate - it is whatever "
+                    "makes the line vertical and still land on the hook, so raising "
+                    "this angle lengthens the line",
+        # Plain degrees, NOT subtype='ANGLE' - that stores radians and only shows
+        # degrees, which would mean converting on every read. The value here is
+        # handed straight to rod_angle_degrees.
+        default=10.0, min=0.5, max=60.0, step=50, precision=1,
+    )
 
         
 
@@ -263,6 +300,11 @@ class VXMOD_CONVERTER_OT_PanelDifeomorphicToVXMod(bpy.types.Panel):
         layout=self.layout
         scene=context.scene
         vxmod  = scene.vxmod
+
+        # Looked up ONCE, up here, because several rows below grey themselves out on
+        # it. A draw() that raises stops dead and silently truncates the panel from
+        # that row down, so anything shared has to be defined before its first use.
+        manny_armature = bpy.data.objects.get("Armature")
 
         # --- Step 1: mesh + materials. Shared by both skeleton paths below, because
         #     each of them needs body_subdiv_cage to exist first.
@@ -279,6 +321,40 @@ class VXMOD_CONVERTER_OT_PanelDifeomorphicToVXMod(bpy.types.Panel):
         step2_box.label(text="Nothing to select")
         step2_box.operator('vxmod.convert_g3fdifeo_to_vxmodf_manny_full',
                            text='Manny FULL', icon='POSE_HLT')
+
+        # Per-bone feature toggles, read by Manny FULL when it builds. Kept
+        # directly under the button that consumes them so it is obvious they are
+        # build options and not something that acts on the rig retroactively -
+        # changing one after a build does nothing until the next Manny FULL.
+        # Split L/R so a feature can be A/B'd on one figure.
+        options_box = step2_box.box()
+        options_box.label(text="Build options (per side)", icon='SETTINGS')
+        options_box.label(text="Pectoral weight falloff:")
+        col = options_box.column(align=True)
+        # expand=True renders the enum as a segmented button pair rather than a
+        # dropdown, so both choices are readable without opening anything and the
+        # active one is obvious at a glance.
+        row = col.row(align=True)
+        row.label(text="L")
+        row.prop(vxmod, 'pectoralWeightModeL', expand=True)
+        row = col.row(align=True)
+        row.label(text="R")
+        row.prop(vxmod, 'pectoralWeightModeR', expand=True)
+
+        # Angle and the button that applies it on ONE row: the field is only
+        # meaningful next to the thing that re-reads it. The row is not align'd so
+        # the two keep a visible gap, and only the button half greys out - the angle
+        # stays editable with no rig yet, since Manny FULL reads it too.
+        row = options_box.row()
+        row.prop(vxmod, 'pectoralRodAngle')
+        sub = row.row(align=True)
+        sub.enabled = manny_armature is not None
+        # Icon only, so the angle field keeps nearly the whole row. text="" rather
+        # than omitting it - without it Blender falls back to bl_label, and an empty
+        # bl_label would render a wide blank button instead of a tight one.
+        sub.operator('vxmod.rebuild_pectoral_fishing_chain',
+                     text="", icon='FILE_REFRESH')
+
         step2_box.label(text="or run the steps separately:")
         row = step2_box.row(align=True)
         row.operator('vxmod.convert_g3fdifeo_to_vxmodf_manny',
@@ -288,7 +364,6 @@ class VXMOD_CONVERTER_OT_PanelDifeomorphicToVXMod(bpy.types.Panel):
 
         # Roll comparison. The label reports the current state and says what a
         # click will do, so it reads as a switch rather than a fire-and-forget.
-        manny_armature = bpy.data.objects.get("Armature")
         state = (manny_armature.data.get(ORIENTATION_PROP)
                  if manny_armature is not None and manny_armature.type == 'ARMATURE'
                  else None)
@@ -312,6 +387,14 @@ class VXMOD_CONVERTER_OT_PanelDifeomorphicToVXMod(bpy.types.Panel):
         row.enabled = state is not None
         row.operator('vxmod.report_roll_rule_deltas',
                      text='Roll rule report '+u'→'+' console', icon='CONSOLE')
+
+        # UE5 audit. Read-only, so it stays enabled whenever there is an armature
+        # to look at - running it on a half-built rig is a legitimate thing to do,
+        # and the report says which parts it could not check.
+        row = step2_box.row(align=True)
+        row.enabled = manny_armature is not None
+        row.operator('vxmod.check_ue5_compatibility',
+                     text='Check UE5 compatibility', icon='ZOOM_ALL')
 
         # --- The original VXMod skeleton. Kept working and deliberately untouched, but
         #     it targets a different skeleton than the Manny path - do not mix the two.
@@ -353,6 +436,10 @@ class ARMATURE_OT_ConstraintsPanel(bpy.types.Panel):
         row=box.row(align=True)
         row.operator('vxmod.fake',text='              ')
         row.operator('vxmod.add_custom_ik_bones',text='Custom IK('+u'β'+')',icon='OUTLINER_DATA_POSE')
+        row.operator('vxmod.fake',text='              ')
+        row=box.row(align=True)
+        row.operator('vxmod.toggle_pectoral_fishing',text='Toggle fishing',icon='CONSTRAINT_BONE')
+        row.operator('vxmod.fake',text='              ')
         row.operator('vxmod.fake',text='              ')
 
 
@@ -865,10 +952,55 @@ class CONVERT_OT_G3F_Body_Difeomorphic_manny_full(bpy.types.Operator):
         #    both halves of each pair, and blend the weights across them.
         setupTwistBones(mesh_object, vx_armature)
 
-        # 6. Re-apply the BlenderPerfect rolls. Step 1 already did this, but the twists
+        # 6. Pectorals: split each into pectoral_base -> pectoral_joint01 and hang
+        #    nipple_joint off the tip. Runs after step 3 because it looks the weights up
+        #    under the Manny group name, and after step 5 so that all bone creation is
+        #    finished before the roll and hinge passes below.
+        #    The falloff is a per-side build option (panel: "Build options"), so the
+        #    two can still be A/B'd on one figure by ticking only one of them.
+        # The enum identifiers ARE the mode names setupPectoralChain expects, just
+        # upper case to match the other enums in VXMOD_vars.
+        pectoral_sides = (
+            ("L", vxmod.pectoralWeightModeL.lower()),
+            ("R", vxmod.pectoralWeightModeR.lower()),
+        )
+        print("Manny FULL: pectoral falloff L={} R={}, rod angle {:.1f} deg"
+              .format(pectoral_sides[0][1], pectoral_sides[1][1],
+                      vxmod.pectoralRodAngle))
+        setupPectoralChain(mesh_object, vx_armature, sides=pectoral_sides,
+                           rod_angle_degrees=vxmod.pectoralRodAngle)
+
+        # 7. Jiggle bones, all built from the mesh and given a small slice of an
+        #    existing group's weight over a local region: the belly off spine_02,
+        #    the glutes off pelvis. Must follow step 3 - they look the source up
+        #    under its MANNY name. Idempotent, so a re-run does not stack.
+        setupStomachBone(mesh_object, vx_armature)
+        setupButtBones(mesh_object, vx_armature)
+        # lowerJaw's direction is anatomical, not structural - no parent/child
+        # relationship points it at the chin, so aim it at the mesh instead. Safe
+        # here: manny_chain_successors has "lowerJaw": None, so no clamp re-aims it.
+        setBoneTailToVertices(mesh_object, vx_armature, "lowerJaw", lower_jaw_tail)
+        # Eye aim helper, on the skin surface between the eyes. No weights; the
+        # aiming and copy-rotation are Control Rig work on the Unreal side.
+        setupCyclopsBone(mesh_object, vx_armature)
+
+        # 8. Re-apply the BlenderPerfect rolls. Step 1 already did this, but the twists
         #    created in step 5 only inherited their parent's roll - this puts them on the
         #    table directly. Idempotent, so re-running costs nothing but certainty.
         applyBlenderPerfectRolls(vx_armature)
+
+        # 9. Re-level the foot and ball hinges. Step 1 already did this, but steps 4
+        #    and 5 re-clamp the foot once mergeBonesIntoTargets has removed the
+        #    metatarsals, and applyBlenderPerfectRolls above rewrites rolls. This is
+        #    the pass that sees the FINAL geometry, so it is the one that decides.
+        #    Idempotent - an already level hinge is inside tolerance and skipped.
+        levelled_hinges = levelFootRollHinges(vx_armature)
+        if levelled_hinges:
+            print("Manny FULL: re-levelled {} hinge(s) after the merge/twist steps:"
+                  .format(len(levelled_hinges)))
+            for bone_name, roll_was, roll_now, tilt_was, tilt_now in levelled_hinges:
+                print("      {:<24} roll {:+8.3f} -> {:+8.3f}   hinge tilt {:+7.3f} -> {:+7.3f}"
+                      .format(bone_name, roll_was, roll_now, tilt_was, tilt_now))
 
         # Display settings for inspecting the result: see the bones through the body, and
         # show each bone's axes so roll is visible at a glance. show_x_ray is an Object
@@ -876,12 +1008,42 @@ class CONVERT_OT_G3F_Body_Difeomorphic_manny_full(bpy.types.Operator):
         vx_armature.show_x_ray = True
         vx_armature.data.show_axes = True
 
-        # Leave the mesh selected and pointed at by the selector, ready to export.
+        # Park the weightless _end tips on a hidden layer. Visibility only - they
+        # still export, which is the point of them.
+        moveEndBonesToLayer(vx_armature)
+
+        # Get the Diffeomorphic source out of the way: it sits on top of the new rig
+        # and makes the result impossible to read. Hidden, not deleted - the mesh is
+        # still bound to it until the exporter takes over, and findDiffeomorphicArmature
+        # needs it if anything is re-run.
         if bpy.context.mode != 'OBJECT':
             bpy.ops.object.mode_set(mode='OBJECT')
+        # Walk the WHOLE subtree, not just direct children. A Diffeomorphic import
+        # nests several levels deep - armature -> figure -> body mesh, with
+        # geografts, props and hair hanging off those in turn - and obj.children is
+        # one level only. Blender 2.79 has no children_recursive, so walk it here.
+        # `seen` is keyed by name so a pathological parent loop cannot spin forever.
+        hidden, stack, seen = [], [source_armature], set()
+        while stack:
+            obj = stack.pop()
+            if obj.name in seen:
+                continue
+            seen.add(obj.name)
+            stack.extend(obj.children)
+            if obj is vx_armature or obj is mesh_object:
+                continue          # never hide what the user is about to work on
+            obj.hide = True
+            obj.select = False
+            hidden.append(obj.name)
+        print("Manny FULL: hid {} object(s) under '{}': {}"
+              .format(len(hidden), source_armature.name, sorted(hidden)))
+
+        # Leave the new armature selected and active - it is what you want to look at
+        # straight after a build.
         bpy.ops.object.select_all(action='DESELECT')
-        mesh_object.select = True
-        bpy.context.scene.objects.active = mesh_object
+        vx_armature.hide = False
+        vx_armature.select = True
+        bpy.context.scene.objects.active = vx_armature
 
         self.report({'INFO'}, "Manny conversion complete - see the console for the report")
         return {'FINISHED'}
@@ -916,6 +1078,99 @@ class ARMATURE_OT_Report_Roll_Rule_Deltas(bpy.types.Operator):
             self.report({'ERROR'}, "Nothing reported - see the console")
             return {'CANCELLED'}
         self.report({'INFO'}, "Roll rule report written to the console")
+        return {'FINISHED'}
+
+
+class ARMATURE_OT_Toggle_Pectoral_Fishing(bpy.types.Operator):
+    ''''''
+    bl_idname = "vxmod.toggle_pectoral_fishing"
+    bl_label = ""
+    bl_description = ("Toggle the fishing mechanism. ON adds a stretchy IK named "
+                      "'VX Fishing IK' to pectoral_joint02 targeting pectoral_hook "
+                      "over joint01+joint02, and pins pectoral_line vertical. OFF "
+                      "removes exactly that and puts the line back. Only the named "
+                      "IK is touched, so a hand made one survives. Blender only - "
+                      "constraints do not survive FBX export")
+    bl_options = {'REGISTER', 'UNDO'}
+
+    def execute(self, context):
+        armature_object = context.active_object
+        if armature_object is None or armature_object.type != 'ARMATURE':
+            armature_object = bpy.data.objects.get("Armature")
+        if armature_object is None or armature_object.type != 'ARMATURE':
+            self.report({'ERROR'}, "No active armature and no object named 'Armature'")
+            return {'CANCELLED'}
+
+        enabled, sides = toggleFishingRig(armature_object)
+        if not sides:
+            self.report({'WARNING'},
+                        "Nothing to toggle - needs pectoral_joint01/02, pectoral_hook "
+                        "and pectoral_line (run Manny FULL first). See console")
+            return {'CANCELLED'}
+        self.report({'INFO'}, "Fishing {} on {}".format(
+            "ENABLED" if enabled else "disabled", ", ".join(sides)))
+        return {'FINISHED'}
+
+
+class ARMATURE_OT_Rebuild_Pectoral_Fishing_Chain(bpy.types.Operator):
+    ''''''
+    bl_idname = "vxmod.rebuild_pectoral_fishing_chain"
+    bl_label = ""
+    bl_description = ("Re-cut pectoral_rod / pectoral_line / pectoral_hook at the rod "
+                      "angle above, on the rig as it stands. Bones only - the fishing "
+                      "chain carries no weight, so nothing needs rebuilding around it. "
+                      "Safe to run repeatedly while dialling the angle in")
+    bl_options = {'REGISTER', 'UNDO'}
+
+    def execute(self, context):
+        armature_object = context.active_object
+        if armature_object is None or armature_object.type != 'ARMATURE':
+            armature_object = bpy.data.objects.get("Armature")
+        if armature_object is None or armature_object.type != 'ARMATURE':
+            self.report({'ERROR'}, "No active armature and no object named 'Armature'")
+            return {'CANCELLED'}
+
+        angle = context.scene.vxmod.pectoralRodAngle
+        rebuilt = rebuildPectoralFishingChains(armature_object, angle)
+        if not rebuilt:
+            self.report({'WARNING'},
+                        "Nothing rebuilt - needs pectoral_base and nipple_joint "
+                        "(run Manny FULL first). See console")
+            return {'CANCELLED'}
+        self.report({'INFO'}, "Fishing chain rebuilt at {:.1f} deg: {}".format(
+            angle, ", ".join("{} drop {:.3f}".format(s, d) for s, d in rebuilt)))
+        return {'FINISHED'}
+
+
+class ARMATURE_OT_Check_UE5_Compatibility(bpy.types.Operator):
+    ''''''
+    bl_idname = "vxmod.check_ue5_compatibility"
+    bl_label = ""
+    bl_description = ("Audit the built rig against what Unreal expects: every Manny "
+                      "bone present, spine_01 placed the DazToUnreal way, and the "
+                      "foot and ball hinges parallel to the sole. Read only - "
+                      "nothing is changed. Full report goes to the console")
+    bl_options = {'REGISTER'}
+
+    def execute(self, context):
+        armature_object = context.active_object
+        if armature_object is None or armature_object.type != 'ARMATURE':
+            armature_object = bpy.data.objects.get("Armature")
+        if armature_object is None or armature_object.type != 'ARMATURE':
+            self.report({'ERROR'}, "No active armature and no object named 'Armature'")
+            return {'CANCELLED'}
+
+        all_ok, results = checkUE5Compatibility(armature_object)
+
+        # Name the checks that failed rather than just the count, so the status bar
+        # is useful on its own and the console is only needed for the detail.
+        failed = [title for title, ok, _lines in results if not ok]
+        if all_ok:
+            self.report({'INFO'}, "UE5 check: all {} checks passed".format(len(results)))
+        else:
+            self.report({'WARNING'}, "UE5 check: {} of {} failed ({}) - see console"
+                        .format(len(failed), len(results),
+                                ", ".join(t.split(". ", 1)[-1] for t in failed)))
         return {'FINISHED'}
 
 

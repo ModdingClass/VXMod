@@ -1154,6 +1154,159 @@ def add_missing_unreal_bones(armature_clone):
     return added
 
 
+# Copied straight across when a bone is rebuilt. Anything missing on this
+# Blender build is skipped rather than raising, so the list can stay generous.
+_EDIT_BONE_CARRIED_ATTRS = (
+    "use_deform", "use_inherit_rotation", "use_inherit_scale", "use_local_location",
+    "use_envelope_multiply", "envelope_distance", "envelope_weight",
+    "head_radius", "tail_radius",
+    "bbone_segments", "bbone_in", "bbone_out", "bbone_x", "bbone_z",
+    "hide", "lock", "show_wire",
+)
+
+
+def _sibling_rank_table():
+    """The export order table, normalised to the Unreal spelling of every name."""
+    from .g3f import difeomorphic_workflow_dictionaries_bones as dict_bones
+    table = {}
+    for parent, wanted in dict_bones.export_bone_sibling_order.items():
+        key = _unreal_bone_name(parent) if parent else ""
+        table[key] = dict((_unreal_bone_name(n), i) for i, n in enumerate(wanted))
+    return table
+
+
+def sort_bones_for_export(armature_clone):
+    """Reorder the clone's bones so Unreal's skeleton tree matches Epic's layout.
+
+    This changes NOTHING about the rig - not a name, not a parent, not a
+    transform. It only changes the order the bones sit in, which is the order
+    they are written to the FBX and therefore the order Unreal indexes them.
+
+    Why it takes a full rebuild: `armature.data.bones` is a depth first walk of
+    the bone tree, and a parent's children come out in the order they sit in
+    `edit_bones`. Blender has no API to move a bone within that collection -
+    `ED_armature_from_edit` appends bones to their parent in edit_bones order and
+    nothing else influences it - so the only way to reorder is to snapshot every
+    bone, delete the lot, and create them again in the order wanted. Everything
+    an EditBone carries is copied across, custom properties included.
+
+    Two consequences of the rebuild, both fine where it is called from:
+      * pose bone constraints on the clone do not survive it, so it must run
+        before anything constrains the clone (the animation path) rather than
+        after;
+      * vertex groups are matched to bones by NAME, so the bound meshes are
+        untouched - which is also why this is safe to run after
+        rename_bones_for_unreal.
+
+    Returns True if the order changed, False if it was already right.
+    """
+    ranks = _sibling_rank_table()
+
+    _enter_edit_on(armature_clone)
+    ebones = armature_clone.data.edit_bones
+
+    snapshot = OrderedDict()
+    for eb in ebones:
+        rec = {
+            "name": eb.name,
+            "parent": eb.parent.name if eb.parent is not None else None,
+            "head": eb.head.copy(),
+            "tail": eb.tail.copy(),
+            "roll": eb.roll,
+            "use_connect": eb.use_connect,
+            "layers": tuple(eb.layers),
+            "props": dict((k, eb[k]) for k in eb.keys()),
+        }
+        for attr in _EDIT_BONE_CARRIED_ATTRS:
+            if hasattr(eb, attr):
+                rec[attr] = getattr(eb, attr)
+        snapshot[eb.name] = rec
+
+    if not snapshot:
+        bpy.ops.object.mode_set(mode='OBJECT')
+        print("sort_bones_for_export: {} has no bones".format(armature_clone.name))
+        return False
+
+    children = OrderedDict()
+    for rec in snapshot.values():
+        children.setdefault(rec["parent"], []).append(rec["name"])
+
+    def ordered_children(parent_name):
+        names = children.get(parent_name, [])
+        key = _unreal_bone_name(parent_name) if parent_name else ""
+        rank = ranks.get(key)
+        if not rank:
+            return names
+        # sorted() is stable, so unlisted bones keep the order they already had
+        # and simply follow the pinned ones.
+        return sorted(names, key=lambda n: rank.get(_unreal_bone_name(n), len(rank)))
+
+    flat = []
+    stack = list(reversed(ordered_children(None)))
+    while stack:
+        name = stack.pop()
+        flat.append(name)
+        stack.extend(reversed(ordered_children(name)))
+
+    # A bone unreachable from a root would mean a parent cycle, which Blender
+    # does not allow - but losing bones silently is not an acceptable failure
+    # mode for an exporter, so anything left over is appended rather than dropped.
+    missed = [n for n in snapshot if n not in set(flat)]
+    if missed:
+        print("  WARNING: {} bone(s) not reachable from a root, appended as-is: {}"
+              .format(len(missed), missed))
+        flat.extend(missed)
+
+    if flat == list(snapshot.keys()):
+        bpy.ops.object.mode_set(mode='OBJECT')
+        print("sort_bones_for_export: {} is already in export order"
+              .format(armature_clone.name))
+        return False
+
+    # Reverse of the depth first order removes every child before its parent.
+    for name in reversed(flat):
+        ebones.remove(ebones[name])
+
+    for name in flat:
+        rec = snapshot[name]
+        eb = ebones.new(name)
+        if eb.name != name:
+            print("  WARNING: Blender renamed '{}' to '{}' while rebuilding"
+                  .format(name, eb.name))
+        eb.head = rec["head"]
+        eb.tail = rec["tail"]
+        eb.roll = rec["roll"]
+        eb.layers = rec["layers"]
+        for attr in _EDIT_BONE_CARRIED_ATTRS:
+            if attr in rec:
+                setattr(eb, attr, rec[attr])
+        for key, value in rec["props"].items():
+            eb[key] = value
+
+    # Parenting in a second pass, so a child never looks for a parent that has
+    # not been created yet. use_connect goes last of all: setting it snaps the
+    # head onto the parent's tail, so the parent has to be in place first.
+    for name in flat:
+        rec = snapshot[name]
+        if rec["parent"] is not None:
+            ebones[name].parent = ebones[rec["parent"]]
+    for name in flat:
+        rec = snapshot[name]
+        if rec["use_connect"]:
+            ebones[name].use_connect = True
+
+    bpy.ops.object.mode_set(mode='OBJECT')
+
+    top = [b.name for b in armature_clone.data.bones if b.parent is None]
+    pelvis = _find_either_spelling(armature_clone.data.bones, "pelvis")
+    print("sort_bones_for_export: reordered {} bones on {}"
+          .format(len(flat), armature_clone.name))
+    print("  top level: {}".format(top))
+    if pelvis is not None:
+        print("  under {}: {}".format(pelvis.name, [c.name for c in pelvis.children]))
+    return True
+
+
 def orient_bones_for_unreal_from_blender_perfect(armature_clone):
     """ArmatureBlenderPerfect -> the UE5 export orientation, via BlenderFriendly.
 
@@ -1665,6 +1818,12 @@ def export_to_unreal_v2(params) : #exportfolderpath,
     # their armature modifier retargeted to the clone above, so their vertex
     # groups get renamed along with the bones.
     rename_bones_for_unreal(armature_clone)
+
+    # Pure reordering, no rig change - it only decides which bone Unreal lists
+    # first under each parent. Must stay after the rename (the table is matched
+    # on Unreal names either way, but the log reads as the FBX will) and after
+    # every bone has been created, since it rebuilds the whole edit bone list.
+    sort_bones_for_export(armature_clone)
 
     #fbx export:
     emptyLodGroup.select=True

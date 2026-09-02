@@ -80,6 +80,14 @@ lower_jaw_joint01_base=[6831, 13603]
 lower_jaw_end_base=[1656, 1661, 2488, 2491, 8554, 8559, 9386, 9389]
 lower_jaw_chin01_base=[1699, 1700, 5817, 5818, 8597, 8598, 12661, 12662]
 lower_jaw_chin01_tip=[1662, 8560]
+# Centreline chin tip. lowerJaw's direction is anatomical - no parent/child
+# relationship points it at the chin - so setBoneTailToVertices aims it here.
+lower_jaw_tail=[36, 64]
+
+# Skin surface between the eyes, above the nose - the head of the cyclop aim
+# helper. Deliberately NOT the midpoint of lEye/rEye: those joints sit inside the
+# skull, and this bone is meant to be visible on the surface.
+cyclops_joint01_base=[5596, 5625]
 lower_lip_joint01_base_L=[4800, 4801, 5810, 5815]
 lower_lip_joint01_base_R=[11658, 11659, 12655, 12660]
 lower_lip_joint02_base_L=[625, 626, 850, 2433]
@@ -111,6 +119,13 @@ rib_base_R=[9583, 10076, 10084]
 butt_base_R=[4, 28, 8618, 8690, 10179, 10412]
 butt_base_L=[4, 28, 1720, 1792, 3292, 3531]
 butt_top_R=[10157]
+# Gluteal crease / under-butt fold, one ring per side. Not used to place a bone -
+# _buildJiggleBone takes their MEAN HEIGHT as the floor for butt_joint01 and sets
+# the downward falloff to reach zero exactly there, so the region stops at the
+# fold instead of bleeding down the thigh, and follows the figure rather than a
+# guessed radius.
+butt_crease_R=[8483, 8695, 8696, 8697, 8698, 8699, 8700, 8701, 8702, 10381, 10411]
+butt_crease_L=[1585, 1797, 1798, 1799, 1800, 1801, 1802, 1803, 1804, 3498, 3530]
 butt_top_L=[3269]
 rib_top_L=[2685]
 rib_top_R=[9583]

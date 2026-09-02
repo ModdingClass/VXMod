@@ -413,6 +413,11 @@ manny_chain_successors = {
     "neck_01": "neck_02",
     "neck_02": "head",
     "head": None,                  # face rig / eyes / jaw are not a continuation
+    # lowerJaw keeps its Daz length. Once lowerTeeth is collapsed the tongue
+    # becomes its only surviving child, which would otherwise put lowerJaw on the
+    # single-child branch and resize it to reach tongue01 - the tongue is not a
+    # continuation of the jaw any more than the face rig is of the head.
+    "lowerJaw": None,
 
     # --- hands / feet ---------------------------------------------------------
     "hand.L": "middle_metacarpal.L",   # middle finger is the natural extension
@@ -457,9 +462,14 @@ manny_chain_successors = {
 # face_collapse_rules below.
 ###############################################################################
 manny_extra_bones_matching = {
-    # Breasts
-    "lPectoral": "breast_joint.L",
-    "rPectoral": "breast_joint.R",
+    # Breasts. pectoral_base is the FIRST link of a chain, not the whole bone:
+    # setupPectoralChain cuts it 40/30/30 and adds a nipple handle at the tip, so
+    # the finished rig has
+    #     pectoral_base -> pectoral_joint01 -> pectoral_joint02 -> nipple_joint
+    # The base carries NO weight - it spans the inner 40%, which sits inside the
+    # ribcage. joint01 and joint02 are the deforming pair.
+    "lPectoral": "pectoral_base.L",
+    "rPectoral": "pectoral_base.R",
 
     # Toes - left
     "lBigToe": "big_toe_joint01.L",
@@ -495,23 +505,27 @@ manny_extra_bones_matching = {
 # Move a name out of a list and it survives as its own deform bone.
 #
 # Generated from the real Diffeomorphic G3F rig
-# (custom_json_files/diffeomorphic_g3f/diffeomorphic_g3f.json, 172 bones) and
-# verified to be exactly the upperFaceRig / lowerFaceRig subtrees.
+# (custom_json_files/diffeomorphic_g3f/diffeomorphic_g3f.json, 172 bones) as
+# exactly the upperFaceRig / lowerFaceRig subtrees, plus the two teeth bones
+# added by hand (see the entries at the end of each list).
 #
 # Hierarchy, for reference:
 #   head -> upperFaceRig (46 children)   -> merged into head
 #   head -> lowerJaw -> lowerFaceRig (18 children) -> merged into lowerJaw
+#   head -> upperTeeth                   -> merged into head      (rigid)
+#   head -> lowerJaw -> lowerTeeth       -> merged into lowerJaw  (rigid)
 #
 # NOT in these lists, and therefore KEPT as deform bones - they hang off head and
 # lowerJaw directly, not off the face rigs:
-#   lEye, rEye, lEar, rEar, upperTeeth        (children of head)
-#   lowerTeeth -> tongue01 -> .. -> tongue04  (children of lowerJaw)
+#   lEye, rEye, lEar, rEar                    (children of head)
+#   tongue01 -> .. -> tongue04                (was under lowerTeeth; the collapse
+#                                              walks tongue01 up onto lowerJaw)
 #
 # Names are Daz names: this runs BEFORE the Daz -> Manny vertex-group rename.
 # Both targets survive that rename untouched - `head` maps to itself, `lowerJaw`
 # is in no rename table.
 #
-# 47 + 19 = 66 bones removed, taking the rig from 172 to 106.
+# 48 + 20 = 68 bones removed, taking the rig from 172 to 104.
 ###############################################################################
 
 # 47 bones -> head
@@ -545,6 +559,12 @@ face_bones_merged_to_head = [
     # nasolabial
     "lLipNasolabialCrease", "lNasolabialMiddle", "lNasolabialUpper", "rLipNasolabialCrease",
     "rNasolabialMiddle", "rNasolabialUpper",
+
+    # teeth. NOT part of upperFaceRig - a direct child of head, folded in here
+    # deliberately. It is a rigid bone: it never moves relative to head, so its
+    # weights on head give identical deformation. Costs the option of animating
+    # the upper teeth separately, which nothing in this pipeline does.
+    "upperTeeth",
 ]
 
 # 19 bones -> lowerJaw
@@ -565,6 +585,17 @@ face_bones_merged_to_lower_jaw = [
     # nasolabial
     "lNasolabialLower", "lNasolabialMouthCorner", "rNasolabialLower",
     "rNasolabialMouthCorner",
+
+    # teeth. NOT part of lowerFaceRig - a direct child of lowerJaw, folded in
+    # here deliberately. Rigid relative to lowerJaw, so its weights on lowerJaw
+    # give identical deformation.
+    #
+    # This also REPARENTS THE TONGUE. Daz chains lowerJaw -> lowerTeeth ->
+    # tongue01..04, and the collapse's nearest-surviving-ancestor pass walks
+    # tongue01 up to lowerJaw once lowerTeeth is doomed - no bone_reparent_overrides
+    # entry needed. What is lost is Daz's "anything that shifts the lower dental
+    # arch carries the tongue with it", which nothing here relies on.
+    "lowerTeeth",
 ]
 
 ###############################################################################
@@ -696,6 +727,49 @@ twist_bone_pairs = [
 # them (step 2) before placing anything (step 3). The calf matters here even at 4%:
 # a short calf pushes calf_twist_01/02 about 1.3 cm up the shin, away from the ankle.
 ###############################################################################
+# Bones re-AIMED at their chain successor, i.e. tail moved onto the child's head.
+#
+# THE WHOLE CHAIN, which is MORE than DazToUnreal does. Measured against the real
+# UE5 skeleton (bone_data.csv): every bone from pelvis to head is connected
+# tail-to-head, each child's local translation being exactly (parent.Length, 0, 0)
+# along the parent's +X:
+#
+#     spine_01 (2.4719 vs len 2.4719)   spine_02 (4.9875 / 4.9875)
+#     spine_03 (7.6259 / 7.6259)        spine_04 (8.8511 / 8.8511)
+#     spine_05 (17.4988 / 17.4988)      neck_01  (11.9150 / 11.9150)
+#     neck_02  (5.8488 / 5.8488)        head     (5.7585 / 5.7585)
+#
+# So aiming every one of them at its child reproduces Epic's structure exactly,
+# and any bone left out ends up pointing somewhere Epic does not.
+#
+# DTU only aims five (DazToUnrealBlueprintUtils.cpp:442-448) - spine_02..spine_05
+# and neck_01. The gaps are omissions, not design:
+#   pelvis    - AlignBone commented out at :441. DTU instead SETS the orientation to
+#               FRotator(90,-90,-90) at :379, which points it up; the real Quinn
+#               value is (-90, 86.397, -90), the same thing rounded. Without that
+#               orientation pass - which this addon does not have - a straight
+#               transcription leaves the Daz pelvis pointing DOWN, because that is
+#               the way Daz's pelvis bone runs.
+#   spine_01  - commented out at :445. Its head IS moved by the midpoint
+#               re-positioning and nothing re-aimed it, so it kept pointing at where
+#               spine_02 sat relative to its OLD head.
+#   neck_02   - DTU never wrote the call, so head was never aimed at.
+#
+# head is not listed because its manny_chain_successors entry is None.
+#
+# The successor comes from manny_chain_successors, so the chain is defined once.
+#
+# This still does NOT reproduce Quinn's S-curve. DazToUnreal never reads the target
+# skeleton's geometry (TargetEpicSkeleton is only used for GetSkeleton()), and
+# neither does this - the curvature stays the Daz figure's. Only the direction each
+# bone points along that curve is corrected.
+spine_bones_aimed_at_children = [
+    "pelvis",
+    "spine_01", "spine_02", "spine_03", "spine_04", "spine_05",
+    "neck_01", "neck_02",
+]
+
+
 bones_length_set_to_successor = [
     "foot.L", "foot.R",
     "thigh.L", "thigh.R",
@@ -711,7 +785,11 @@ bones_length_set_to_successor = [
 ###############################################################################
 bones_that_must_be_kept = [
     "lEye", "rEye", "lEar", "rEar",
-    "upperTeeth", "lowerTeeth",
+    # Teeth deliberately removed from the guard: they are now in the collapse
+    # lists above, merged into head / lowerJaw. Leaving them here would not
+    # "protect" them - the clash check ABORTS the whole merge and returns
+    # ({}, []), so the entire 68-bone face collapse would silently not run.
+    # "upperTeeth", "lowerTeeth",
     "tongue01", "tongue02", "tongue03", "tongue04",
 ]
 
@@ -911,3 +989,33 @@ def getMannyBoneRenameMap():
     combined.update(manny_extra_bones_matching)
     return combined
 
+
+
+###############################################################################
+# Sibling order for the exported skeleton
+###############################################################################
+# Unreal builds its reference skeleton by walking the FBX node tree in child
+# order, and Blender's FBX exporter emits bones in the order of
+# `armature.data.bones` - which is a depth first walk whose sibling order is the
+# order the bones sit in `edit_bones`. That order came from Daz, so the Daz
+# extras (butt, gens, stomach, hip twist ends) land ahead of spine_01 and the
+# skeleton tree in Unreal looks nothing like Epic's, even though every bone,
+# parent and transform is identical.
+#
+# Each entry names a parent and the children that must come FIRST under it, in
+# order. Anything not listed keeps the relative order it already had, appended
+# after the listed ones - so this is a "pin these to the top" table, not a full
+# ordering, and adding a bone to the rig never needs an edit here.
+#
+# The empty key "" is the top level, i.e. the bones with no parent. They become
+# the children of the root that the FBX exporter synthesises from the armature
+# object, so `pelvis` first there is what puts the deform skeleton above the IK
+# markers - the same layout Epic ships.
+#
+# Names may be written either way, `thigh.L` or `thigh_l`; both the table and
+# the rig are normalised to the Unreal spelling before matching, so the table
+# reads the same whether the sort runs before or after rename_bones_for_unreal.
+export_bone_sibling_order = {
+    "":       ["pelvis", "ik_foot_root", "ik_hand_root", "interaction", "center_of_mass"],
+    "pelvis": ["spine_01", "thigh_l", "thigh_r"],
+}

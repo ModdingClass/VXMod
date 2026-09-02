@@ -113,6 +113,9 @@ def alignArmatureFromDifeomorphicToManny():
       5. Applies the two DazToUnreal re-positionings (pelvis drop, spine_01 midpoint).
       6. Clamps every bone's length so it never overshoots its nearest child's head
          (see clampBoneLengthsToChildHeads).
+      7. Levels each foot's hinge axis to the ground, for foot-roll compatibility
+         (see levelFootRollHinges). Roll only, and NOT from DazToUnreal - it is
+         measured off the UE5 skeleton, which does exactly this.
 
     No `root` bone is created: the Blender FBX exporter promotes the "Armature"
     object itself to the root bone, so a root bone here would be a duplicate.
@@ -286,10 +289,39 @@ def alignArmatureFromDifeomorphicToManny():
     else:
         print("  WARNING: spine_01 / pelvis / spine_02 missing - spine_01 move skipped")
 
+    # ================================================================ SPINE AIM
+    # DazToUnreal's spine pass, transcribed: point spine_02..spine_05 and neck_01
+    # at their chain successors. Curvature is NOT touched - only the direction each
+    # bone points along the curve the Daz figure already has.
+    #
+    # Runs after the re-positionings because spine_01's head moves up there, and
+    # before the clamp because moving a tail onto the child's head already sets the
+    # length the clamp would have set - so the clamp comes out a no-op on these
+    # rather than fighting them.
+    # ============================================================================
+    aimed_spine = aimSpineBonesAtChildren(vx_armature)
+
     # ------------------------------------------------------- clamp bone lengths
-    # Must run LAST: the two re-positionings above move heads without moving the
+    # Must run after the re-positionings above: they move heads without moving the
     # children, which changes the head-to-child-head distances this depends on.
     clamped = clampBoneLengthsToChildHeads(vx_armature)
+
+    # ================================================================= FOOT HINGE
+    # DazToUnreal has no equivalent of this step - it is taken from the UE5
+    # skeleton itself, where the foot's local Pitch is exactly the negated tilt
+    # its parents accumulated, putting the hinge axis back on the horizontal.
+    # That level hinge is what makes foot roll and ball roll clean rotations.
+    #
+    # Runs AFTER the clamp on purpose: the foot is in bones_length_set_to_successor,
+    # so the clamp is what lands its tail exactly on ball's head. Solving against
+    # the bone direction before that would aim at the wrong line.
+    #
+    # ROLL ONLY - heads, tails and lengths are already final at this point and are
+    # not touched. See levelFootRollHinges for the measurements and the reason this
+    # does not change the exported FBX (reaim_feet_for_unreal rebuilds those frames
+    # absolutely at export time).
+    # ============================================================================
+    levelled_hinges = levelFootRollHinges(vx_armature)
 
     bpy.ops.object.mode_set(mode='OBJECT')
 
@@ -317,10 +349,20 @@ def alignArmatureFromDifeomorphicToManny():
     if name_collisions:
         print("  WARNING: {} name collisions (Blender uniquified): {}"
               .format(len(name_collisions), name_collisions))
+    if aimed_spine:
+        print("  aimed {} spine bone(s) at their chain successor:".format(len(aimed_spine)))
+        for bone_name, child_name, turned in aimed_spine:
+            print("      {:<12} -> {:<12} turned {:6.3f} deg"
+                  .format(bone_name, child_name, turned))
     if clamped:
         print("  clamped {} bone lengths to their nearest child head:".format(len(clamped)))
         for bone_name, was, now in clamped:
             print("      {:<24} {:.6f} -> {:.6f}".format(bone_name, was, now))
+    if levelled_hinges:
+        print("  levelled {} foot hinge(s) to the ground:".format(len(levelled_hinges)))
+        for bone_name, roll_was, roll_now, tilt_was, tilt_now in levelled_hinges:
+            print("      {:<24} roll {:+8.3f} -> {:+8.3f}   hinge tilt {:+7.3f} -> {:+7.3f}"
+                  .format(bone_name, roll_was, roll_now, tilt_was, tilt_now))
 
     return {'FINISHED'}
 
@@ -431,6 +473,402 @@ def clampBoneLengthsToChildHeads(vx_armature, min_length=1e-5):
             print("      {:<24} children: {}".format(bone_name, child_names))
 
     return clamped
+
+
+def aimSpineBonesAtChildren(vx_armature, bone_names=None, min_length=1e-5):
+    """
+    Point each listed spine bone at its chain successor, DazToUnreal style.
+
+    Transcribes DTU's five AlignBone calls (DazToUnrealBlueprintUtils.cpp:442-448)
+    - see dict_bones.spine_bones_aimed_at_children for which five and why not the
+    others. It does NOT reproduce Quinn's S-curve: DTU never reads the target
+    skeleton's geometry, so the curvature remains the Daz figure's and this only
+    fixes which way each bone points along it.
+
+    SIMPLER THAN DTU, ON PURPOSE, in two ways:
+
+    - DTU aims in YAW ONLY (axis (0,0,1), Pitch left at 0), which is a 1-DOF
+      approximation - and it uses plain atan rather than atan2, so it loses the
+      quadrant. Here the tail is simply moved onto the child's head, a full 3-D
+      aim with no trig at all. The two agree whenever the offset lies in the yaw
+      plane, which for a symmetric figure's spine it does; where they differ, the
+      full aim is the correct one.
+
+    - Order is irrelevant. DTU has to work down the chain (04, 03, 02, then 05,
+      then neck_01) because AlignBone reads the child's LOCAL offset and rotating a
+      parent changes it. Blender edit bones store head and tail in armature space,
+      so aiming a parent does not disturb its children and each bone is independent.
+
+    Moving the tail onto the child's head also sets the LENGTH to reach it, which
+    is what clampBoneLengthsToChildHeads would do for these bones anyway - so the
+    clamp afterwards is a no-op on them rather than a conflict.
+
+    KNOWN SIDE EFFECT: changing a bone's direction changes what its existing roll
+    number means in world space, because roll is measured against a frame built
+    from the bone's own direction. applyBlenderPerfectRolls has no spine entries
+    (blender_perfect_roll_deltas is empty) precisely because Diffeomorphic already
+    delivers the convention there "exact to three decimals" - that claim is about
+    the UN-aimed spine, so re-check it if the rolls start looking off. The report
+    below prints how far each bone actually turned, which is the number to judge
+    that by.
+
+    The armature must already be in EDIT mode.
+
+    Returns a list of (bone_name, child_name, degrees_turned).
+    """
+    if bone_names is None:
+        bone_names = getattr(dict_bones, "spine_bones_aimed_at_children", [])
+
+    ebones = vx_armature.data.edit_bones
+    successors = dict_bones.manny_chain_successors
+    aimed = []
+
+    for bone_name in bone_names:
+        eb = ebones.get(bone_name)
+        if eb is None:
+            print("  spine aim: '{}' not in the rig - skipped".format(bone_name))
+            continue
+
+        candidates = successors.get(bone_name)
+        if candidates is None:
+            print("  spine aim: '{}' has no chain successor - skipped".format(bone_name))
+            continue
+        if isinstance(candidates, str):
+            candidates = [candidates]
+
+        child = None
+        for candidate in candidates:
+            child = ebones.get(candidate)
+            if child is not None:
+                break
+        if child is None:
+            print("  spine aim: none of '{}' successors {} are in the rig - skipped"
+                  .format(bone_name, candidates))
+            continue
+
+        before = eb.tail - eb.head
+        after = child.head - eb.head
+        if before.length < min_length or after.length < min_length:
+            print("  spine aim: '{}' and '{}' are coincident - skipped"
+                  .format(bone_name, child.name))
+            continue
+
+        turned = math.degrees(before.normalized().angle(after.normalized()))
+        eb.tail = child.head.copy()
+        aimed.append((bone_name, child.name, turned))
+
+    return aimed
+
+
+def levelFootRollHinges(vx_armature,
+                        bone_names=("foot.L", "foot.R", "ball.L", "ball.R"),
+                        tolerance_degrees=0.01, vertical_guard_degrees=1.0):
+    """
+    Level each foot's HINGE axis to the ground, for foot-roll compatibility.
+
+    Measured from the UE5 reference (bone_data.csv), this is the one property
+    Epic actually solved for on the foot. Tracing the hinge axis (UE local Z,
+    the blue one) down the leg:
+
+        pelvis   0.0000 deg from horizontal
+        thigh   -2.5398          <- leg splay tips it
+        calf    -2.5398          <- passed straight through, its local
+                                    rotation is a pure yaw
+        foot    -0.0015          <- levelled again
+
+    and foot's local Pitch is exactly -2.5398, the negated accumulated tilt.
+    That is a deliberate correction, not inheritance. Note what is NOT
+    constrained: the foot's own direction ends 88.19 deg from horizontal rather
+    than a clean 90, and the toe axis 1.81 deg off level. Both are leftovers.
+    Only the hinge lands on an exact value, because a level hinge is what makes
+    ankle pitch and ball roll clean rotations for an animator.
+
+    In BlenderPerfect the hinge is the bone's local +X ("every joint flexes
+    about its local +X"), so levelling the hinge means putting local X in the
+    horizontal plane. Only ROLL is touched - heads, tails, lengths and parenting
+    are left exactly as the builder placed them.
+
+    BALL IS IN THE LIST TOO, and has to be. In the UE5 reference ball's local
+    rotation relative to foot is exactly (0, 0, 90) - a pure yaw about the axis
+    the two share - so ball's hinge IS foot's hinge, and levelling one without
+    the other leaves the toe joint rolling about a tilted axis. Each is levelled
+    against its own direction rather than copied from the foot: that guarantees
+    "X parallel to the ground" for both even when the toe line and the
+    foot->ball line differ in azimuth, and the two agree anyway when they do
+    not, which is the normal case.
+
+    Must run AFTER clampBoneLengthsToChildHeads. The foot is in
+    bones_length_set_to_successor, so the clamp is what puts its tail exactly on
+    ball's head; until then the bone direction this solves against is not final.
+
+    Sign-safe by construction: the only horizontal directions perpendicular to
+    the bone are +/-(direction x UP), and the one closest to the rig's existing
+    X is chosen. That makes this the SMALLEST roll that levels the hinge, and it
+    inherits whatever left/right mirroring the Daz rig already had instead of
+    imposing a convention. Idempotent for the same reason - a level hinge is
+    already within tolerance and is skipped.
+
+    Does NOT affect the exported FBX. exporter_unreal.reaim_feet_for_unreal
+    rebuilds the foot and ball frames outright at export time (it has to: in
+    Blender the foot points at the ball, in Manny it follows the calf), and an
+    absolute frame discards anything set here. This is for the Blender-side rig,
+    so the hinge is right while posing and inspecting.
+
+    Handles its own edit-mode entry via _beginEditBones, which is a no-op when
+    the caller is already editing this armature. So it works both inline in the
+    builder and as a standalone pass at the end of the pipeline.
+
+    Returns a list of (bone_name, roll_before, roll_after, tilt_before,
+    tilt_after), all in degrees.
+    """
+    UP = Vector((0.0, 0.0, 1.0))
+    token = _beginEditBones(vx_armature)
+    ebones = vx_armature.data.edit_bones
+    levelled = []
+
+    try:
+        for bone_name in bone_names:
+            eb = ebones.get(bone_name)
+            if eb is None:
+                print("  foot hinge: '{}' not found - skipped".format(bone_name))
+                continue
+
+            direction = eb.tail - eb.head
+            if direction.length < 1e-6:
+                print("  foot hinge: '{}' is zero length - skipped".format(bone_name))
+                continue
+            direction.normalize()
+
+            # A vertical bone has EVERY perpendicular horizontal, so its hinge is
+            # already level and "level it" does not pick out a roll. Leave it
+            # rather than snapping to an arbitrary one.
+            if abs(direction.dot(UP)) > math.cos(math.radians(vertical_guard_degrees)):
+                print("  foot hinge: '{}' is within {:.1f} deg of vertical - hinge "
+                      "is level at any roll, skipped"
+                      .format(bone_name, vertical_guard_degrees))
+                continue
+
+            current_x = eb.matrix.to_3x3() * Vector((1.0, 0.0, 0.0))
+            tilt_before = math.degrees(math.asin(max(-1.0, min(1.0, current_x.z))))
+            if abs(tilt_before) <= tolerance_degrees:
+                continue                   # already level - keeps this idempotent
+
+            hinge = direction.cross(UP).normalized()
+            if hinge.dot(current_x) < 0.0:
+                hinge = -hinge             # keep the side the rig already uses
+
+            # align_roll aims the bone's local Z, so hand it the Z that belongs
+            # with the X we want. Blender frames are right handed, so Z = X x Y.
+            roll_before = math.degrees(eb.roll)
+            eb.align_roll(hinge.cross(direction))
+            roll_after = math.degrees(eb.roll)
+
+            after_x = eb.matrix.to_3x3() * Vector((1.0, 0.0, 0.0))
+            tilt_after = math.degrees(math.asin(max(-1.0, min(1.0, after_x.z))))
+
+            levelled.append((bone_name,
+                             _wrapDegrees(roll_before), _wrapDegrees(roll_after),
+                             tilt_before, tilt_after))
+    finally:
+        _endEditBones(token)
+
+    return levelled
+
+
+def checkUE5Compatibility(vx_armature=None, tolerance_degrees=0.05,
+                          position_tolerance=1e-4, verbose=True):
+    """
+    Read-only audit of the built rig against what Unreal expects. Changes NOTHING.
+
+    Four checks, each reported independently so a partial rig still tells you
+    something:
+
+      1. Every Manny bone present. The reference set is derived from
+         dtu_manny_bones_matching (the DazToUnreal transcription) plus "pelvis",
+         which the builder adds by hand. Twists are counted separately because
+         they only exist after setupTwistBones - missing twists mean "you ran
+         Armature only", not "the rig is broken".
+
+      2. spine_01 placed the way DazToUnreal places it: its head at the
+         pelvis/spine_02 midpoint in Z, and on the pelvis in X and Y. Note this
+         is measured RELATIVE to the pelvis, so a mispositioned pelvis shows up
+         here too.
+
+         The pelvis's own 0.7 drop is deliberately NOT checked. It is not
+         verifiable from the finished rig - the drop consumed the original
+         height - so the only way to test it is against the source Diffeomorphic
+         rig, and this audit will not depend on that still being in the scene.
+         Do not "fix" this by reaching for the source armature.
+
+      3./4. foot and ball hinges parallel to the sole. In BlenderPerfect the
+         hinge is the bone's local +X, and the sole is the ground plane in the
+         rest pose, so the test is simply that local X has no Z component. This
+         is what levelFootRollHinges sets, and what Epic solved for on the real
+         mannequin - see that function for the measurements.
+
+    Returns (all_ok, results), where results is a list of
+    (title, ok, [detail lines]).
+    """
+    if vx_armature is None:
+        vx_armature = bpy.data.objects.get("Armature")
+    if vx_armature is None or vx_armature.type != 'ARMATURE':
+        print("checkUE5Compatibility: no armature named 'Armature' found")
+        return False, [("armature", False, ["no armature named 'Armature' found"])]
+
+    UP = Vector((0.0, 0.0, 1.0))
+    results = []
+
+    token = _beginEditBones(vx_armature)
+    try:
+        ebones = vx_armature.data.edit_bones
+        present = set(eb.name for eb in ebones)
+
+        # ---------------------------------------------- 1. Manny bones present
+        expected = set(dict_bones.dtu_manny_bones_matching.values())
+        expected.add("pelvis")
+        missing = sorted(expected - present)
+
+        expected_twists = set()
+        for _parent, twists, _blend in dict_bones.twist_bone_pairs:
+            for twist_name, _fraction in twists:
+                expected_twists.add(twist_name)
+        missing_twists = sorted(expected_twists - present)
+
+        lines = ["{}/{} Manny bones present".format(
+            len(expected) - len(missing), len(expected))]
+        for name in missing:
+            lines.append("MISSING  {}".format(name))
+        if missing_twists:
+            lines.append("{}/{} twist bones present - run setupTwistBones "
+                         "(or 'Manny FULL') if you expected them"
+                         .format(len(expected_twists) - len(missing_twists),
+                                 len(expected_twists)))
+            for name in missing_twists:
+                lines.append("missing twist  {}".format(name))
+        else:
+            lines.append("{}/{} twist bones present".format(
+                len(expected_twists), len(expected_twists)))
+        results.append(("1. Manny bones present", not missing, lines))
+
+        # ------------------------------------------------ 2. spine_01 placement
+        # Relative to the pelvis on purpose. That keeps the check self-contained:
+        # the pelvis drop itself cannot be verified after the fact (the drop
+        # consumed the original height), and testing it would mean depending on
+        # the source Diffeomorphic rig still existing - which it may not.
+        lines = []
+        ok_positions = True
+
+        if "spine_01" in present and "pelvis" in present and "spine_02" in present:
+            pelvis_head = ebones["pelvis"].head
+            spine_02_head = ebones["spine_02"].head
+            wanted = Vector((pelvis_head.x, pelvis_head.y,
+                             (pelvis_head.z + spine_02_head.z) / 2.0))
+            offset = (ebones["spine_01"].head - wanted).length
+            good = offset <= position_tolerance
+            ok_positions = good
+            lines.append("spine_01 head {} the midpoint rule, off by {:.6f}"
+                         .format("MATCHES" if good else "MISSES", offset))
+            lines.append("(measured against pelvis and spine_02 - the pelvis drop "
+                         "itself is not verifiable post hoc and is not checked)")
+        else:
+            ok_positions = False
+            lines.append("spine_01 / pelvis / spine_02 not all present - "
+                         "midpoint rule not checked")
+
+        results.append(("2. spine_01 placement", ok_positions, lines))
+
+        # ------------------------------------------- 3./4. foot and ball hinges
+        for title, names in (("3. foot hinge parallel to the sole",
+                              ("foot.L", "foot.R")),
+                             ("4. ball hinge parallel to the sole",
+                              ("ball.L", "ball.R"))):
+            lines = []
+            ok_hinges = True
+            for bone_name in names:
+                eb = ebones.get(bone_name)
+                if eb is None:
+                    ok_hinges = False
+                    lines.append("{:<10} MISSING".format(bone_name))
+                    continue
+                axis = eb.matrix.to_3x3() * Vector((1.0, 0.0, 0.0))
+                tilt = math.degrees(math.asin(max(-1.0, min(1.0, axis.z))))
+                good = abs(tilt) <= tolerance_degrees
+                ok_hinges = ok_hinges and good
+                lines.append("{:<10} hinge tilt {:+8.4f} deg  {}"
+                             .format(bone_name, tilt,
+                                     "ok" if good else "NOT LEVEL"))
+            results.append((title, ok_hinges, lines))
+    finally:
+        _endEditBones(token)
+
+    all_ok = all(ok for _title, ok, _lines in results)
+
+    if verbose:
+        print("")
+        print("UE5 compatibility check on '{}'".format(vx_armature.name))
+        print("=" * 64)
+        for title, ok, lines in results:
+            print("[{}] {}".format("PASS" if ok else "FAIL", title))
+            for line in lines:
+                print("       {}".format(line))
+        print("=" * 64)
+        print("{}".format("ALL CHECKS PASSED" if all_ok
+                          else "SOME CHECKS FAILED - see above"))
+        print("")
+
+    return all_ok, results
+
+
+def moveEndBonesToLayer(armature_object=None, layer_index=1, suffix="_end"):
+    """
+    Park the weightless _end tips on their own armature layer and hide it.
+
+    They exist only so their parent has a child - Unreal draws a childless bone as
+    a nub rather than a bone - and they clutter the viewport otherwise. Layer 1 is
+    the convention already used for this in armature.py:555.
+
+    VISIBILITY ONLY. Layers do not affect the FBX export: Blender filters bones by
+    use_deform (see _buildJiggleBone), never by layer, and exporter_unreal carries
+    `layers` across its bone rebuild at :1217 / :1279 - so the tips still reach
+    Unreal, which is the whole reason they exist.
+
+    Matches the suffix after any .L / .R, so butt_end.L counts as well as
+    stomach_end. The layer list is assigned whole rather than toggled bit by bit,
+    because Blender rejects a bone that ends up on no layer at all.
+
+    Returns the names moved.
+    """
+    if armature_object is None:
+        armature_object = bpy.data.objects.get("Armature")
+    if armature_object is None or armature_object.type != 'ARMATURE':
+        print("moveEndBonesToLayer: no armature named 'Armature' found")
+        return []
+
+    if bpy.context.mode != 'OBJECT':
+        bpy.ops.object.mode_set(mode='OBJECT')
+
+    target_layers = [i == layer_index for i in range(32)]
+    moved = []
+    for bone in armature_object.data.bones:
+        name = bone.name
+        if name.endswith(".L") or name.endswith(".R"):
+            name = name[:-2]
+        if not name.endswith(suffix):
+            continue
+        bone.layers = target_layers
+        bone.select = False
+        bone.select_head = False
+        bone.select_tail = False
+        moved.append(bone.name)
+
+    if moved:
+        # Layer 0 stays on so the rig is still visible; the tips' layer goes off.
+        armature_object.data.layers[0] = True
+        armature_object.data.layers[layer_index] = False
+
+    print("moveEndBonesToLayer: {} bone(s) moved to layer {} and hidden: {}"
+          .format(len(moved), layer_index, moved or "none"))
+    return moved
 
 
 def findDiffeomorphicArmature():
@@ -587,7 +1025,9 @@ def mergeBonesIntoTargets(mesh_object, armature_object, rules=None, delete_bones
         return ({}, [])
 
     # A careless edit to the hardcoded lists must not be able to delete a bone the rest
-    # of the pipeline depends on (lEye, upperTeeth, tongue01, ...).
+    # of the pipeline depends on (lEye, tongue01, ...). Note this ABORTS the whole
+    # collapse rather than skipping the offending bone, so a name that belongs in a
+    # merge list must be removed from bones_that_must_be_kept, not left in both.
     protected = set(getattr(dict_bones, "bones_that_must_be_kept", []))
     if protected:
         for target_name, source_names in rules.items():
@@ -857,17 +1297,31 @@ def _splitTwistWeights(mesh_object, name_01, name_02, parent_geometry,
     w*(1-u) + w*u == w, so total influence per vertex is unchanged and the mesh does
     not move at rest; the pair only diverges once they rotate.
 
-    The source is whichever of the two already has a group - usually _01, but the Daz
-    forearm twist maps to _02 (DazToUnreal's "// The Lower Arm twists are swapped").
+    IDEMPOTENT, and this is why the source is the SUM of the two groups rather than
+    whichever one already exists. Manny FULL rebuilds the BONES but never the MESH,
+    so on a re-run both groups are present holding run-1's already-split weights.
+    Reading one of them would re-split an already-split value and pull influence
+    steadily toward whichever twist sits nearer the parent's head - it degrades a
+    little more every run. Because w*(1-u) + w*u == w, their sum is exactly the
+    original weight, so summing recovers it and a re-run reproduces run 1.
+
+    On the FIRST run only one of the two exists - usually _01, but the Daz forearm
+    twist maps to _02 (DazToUnreal's "// The Lower Arm twists are swapped") - and
+    the sum is just that group, so the same code path covers both cases.
+
+    The same caveat as everywhere else in this file: weight painted onto either
+    twist by hand is folded back in and redistributed.
 
     Returns the number of vertices written, or None if neither group has weights.
     """
     groups = mesh_object.vertex_groups
-    source = groups.get(name_01)
-    if source is None:
-        source = groups.get(name_02)
-    if source is None:
+    existing_01 = groups.get(name_01)
+    existing_02 = groups.get(name_02)
+    if existing_01 is None and existing_02 is None:
         return None
+    # The SUM of the two, not one of them - see the docstring. This is what makes
+    # a re-run idempotent.
+    source_indices = set(g.index for g in (existing_01, existing_02) if g is not None)
 
     head, direction, length = parent_geometry
     if length <= 0.0:
@@ -880,22 +1334,24 @@ def _splitTwistWeights(mesh_object, name_01, name_02, parent_geometry,
     near_is_01 = fraction_01 <= fraction_02
 
     matrix = mesh_object.matrix_world
-    source_index = source.index
 
-    # Read everything first: the source is one of the two groups about to be written.
+    # Read everything first: the sources ARE the two groups about to be written.
     samples = []
     for v in mesh_object.data.vertices:
+        weight = 0.0
         for g in v.groups:
-            if g.group == source_index and g.weight > 0.0:
-                world_co = matrix * v.co
-                t = (world_co - head).dot(direction) / length
-                if span > 0.0:
-                    u = (t - low) / span
-                else:
-                    u = 0.5
-                u = max(0.0, min(1.0, u))
-                samples.append((v.index, g.weight, u))
-                break
+            if g.group in source_indices:
+                weight += g.weight
+        if weight <= 0.0:
+            continue
+        world_co = matrix * v.co
+        t = (world_co - head).dot(direction) / length
+        if span > 0.0:
+            u = (t - low) / span
+        else:
+            u = 0.5
+        u = max(0.0, min(1.0, u))
+        samples.append((v.index, weight, u))
 
     if not samples:
         return None
@@ -913,6 +1369,1416 @@ def _splitTwistWeights(mesh_object, name_01, name_02, parent_geometry,
             group_02.add([v_index], near_weight, 'REPLACE')
 
     return len(samples)
+
+
+def setupPectoralChain(mesh_object, armature_object, sides=None,
+                       first_split=0.40, nipple_length_fraction=0.0625,
+                       split_low=0.25, split_high=0.75,
+                       build_fishing_chain=True, rod_angle_degrees=10.0):
+    """
+    Split each pectoral into a chain and hang a nipple handle off the tip.
+
+    Daz gives one bone per breast (lPectoral / rPectoral, renamed to
+    pectoral_base by the builder). This turns each into TWO chains off one base:
+
+        spine_05 -> pectoral_base -> pectoral_joint01 -> pectoral_joint02
+                                                      -> nipple_joint
+                                  -> pectoral_rod -> pectoral_line
+                                                  -> pectoral_hook
+
+    The first is the deforming chain. The second is the "fishing rod": a rod
+    cantilevered out and up from the base, a line hanging vertically off its tip,
+    and a hook sitting on the nipple. Like a rod held over water with a weighted
+    line, the line stays perpendicular to the world plane, so gravity-style
+    motion becomes a rotation of the rod alone. It carries no weight - it is a
+    mechanism to drive the deforming chain from, not a deformer.
+
+    `rod_angle_degrees` tilts the rod UP from the base->nipple line. The angle and
+    the line length are not independent: the line can only be vertical AND land on
+    the hook if the rod tip is directly above the nipple, so the angle is the input
+    and the line length falls out (printed on each build).
+
+    Cut twice: first at `first_split` (0.40, so 40/60), then the outer 60 halved,
+    putting the second cut at 0.70. Segments are therefore 40% / 30% / 30% of the
+    original bone, and nipple_joint is a short leaf past the tip - something
+    selectable to hang constraints or manual posing off later.
+
+    `nipple_length_fraction` is a fraction of the ORIGINAL bone, not of the
+    segment it extends. 0.0625 is a sixteenth, which on a 0.2324 G3F pectoral
+    gives a ~1.5 cm stub: big enough to click, small enough not to read as a
+    deforming bone in the viewport.
+
+    WEIGHTS GO ON joint02 AND joint03, NOT joint01. The split reads joint01 (the
+    renamed Daz group, where all the weight starts) and writes the near half to
+    joint02 and the far half to joint03, then clears joint01. The gradient is
+    exactly the one the two-bone version produced - it just rides one bone
+    further out.
+
+    That is deliberate rather than incidental. Measured on G3F, the breast does
+    not begin until t ~= 0.47 along the Daz bone, so joint01's whole 0..0.40 span
+    is inside the ribcage. Leaving it weightless makes it a structural root the
+    breast swings from, and puts the two deforming bones where the geometry
+    actually is.
+
+    TWO SPLIT MODES, ONE PER SIDE, DELIBERATELY. The left breast is split
+    "axial" and the right "radial" so the two can be compared on the same
+    figure. Both hand a vertex's weight over from joint01 to joint02 across the
+    band between split_low and split_high, and both preserve total influence
+    (w*(1-u) + w*u == w), so neither moves the mesh at rest. They differ only in
+    what "how far along the breast" means:
+
+        axial   t = ((co - head) . direction) / length
+                Planes perpendicular to the bone. Distance off the axis is
+                ignored, so the underside and the topside of the breast hand
+                over at the same t. Same maths as _splitTwistWeights.
+
+        radial  t = |co - head| / length
+                Spherical shells centred on the chest wall. Follows the breast's
+                actual shape more closely, but a vertex that sits far off-axis
+                reads as "further along" than the axial version says it is.
+
+    Set both sides to the same mode once you have picked a winner - see the
+    `sides` argument, which is (side letter, mode) pairs.
+
+    Idempotent by refusing to re-run: if pectoral_joint01 already exists on a
+    side, that side is skipped whole. Splitting already-split weights would pull
+    everything back toward the base.
+
+    Must run AFTER switchVertexGroupsToManny - it looks for the vertex group
+    under the Manny name (pectoral_base.L), not the Daz one (lPectoral).
+
+    Returns a list of (side, mode, created_bone_names, verts_split).
+    """
+    if sides is None:
+        sides = (("L", "axial"), ("R", "radial"))
+
+    if armature_object is None or armature_object.type != 'ARMATURE':
+        print("setupPectoralChain: no armature given")
+        return []
+
+    token = _beginEditBones(armature_object)
+    ebones = armature_object.data.edit_bones
+
+    # 40 / 60, then the 60 halved: boundaries at 0.40 and 0.70 of the original.
+    second_split = first_split + (1.0 - first_split) * 0.5
+
+    geometry = {}      # side -> (head, direction, length)
+    created = {}       # side -> [names]
+    try:
+        for side, _mode in sides:
+            root_name = "pectoral_base.{}".format(side)
+            second_name = "pectoral_joint01.{}".format(side)
+            third_name = "pectoral_joint02.{}".format(side)
+            nipple_name = "nipple_joint.{}".format(side)
+
+            root = ebones.get(root_name)
+            if root is None:
+                print("  pectoral: '{}' not in the rig - {} side skipped"
+                      .format(root_name, side))
+                continue
+            if ebones.get(second_name) is not None:
+                print("  pectoral: '{}' already exists - {} side skipped "
+                      "(re-splitting would collapse the blend)"
+                      .format(second_name, side))
+                continue
+
+            length = root.length
+            if length <= 0.0:
+                print("  pectoral: '{}' has zero length - {} side skipped"
+                      .format(root_name, side))
+                continue
+
+            head = root.head.copy()
+            tail = root.tail.copy()
+            direction = (tail - head).normalized()
+            cut_1 = head + direction * (length * first_split)
+            cut_2 = head + direction * (length * second_split)
+            geometry[side] = (head.copy(), direction.copy(), length)
+
+            # joint01 keeps its head, parent and roll; only its tail moves in.
+            root.tail = cut_1
+
+            second = ebones.new(second_name)
+            second.head = cut_1
+            second.tail = cut_2
+            second.roll = root.roll
+            second.use_connect = False
+            second.parent = root
+
+            third = ebones.new(third_name)
+            third.head = cut_2
+            third.tail = tail
+            third.roll = root.roll
+            third.use_connect = False
+            third.parent = second
+
+            nipple = ebones.new(nipple_name)
+            nipple.head = tail
+            nipple.tail = tail + direction * (length * nipple_length_fraction)
+            nipple.roll = root.roll
+            nipple.use_connect = False
+            nipple.parent = third
+
+            created[side] = [second.name, third.name, nipple.name]
+            wanted = (second_name, third_name, nipple_name)
+            if tuple(created[side]) != wanted:
+                print("  WARNING: pectoral names were uniquified by Blender: {}"
+                      .format(created[side]))
+
+            # --- fishing chain: rod -> line -> hook ------------------------------
+            if build_fishing_chain:
+                _createFishingChain(ebones, side, root, nipple, rod_angle_degrees,
+                                    created.setdefault(side, []))
+    finally:
+        _endEditBones(token)
+
+    # Weights need OBJECT mode, and the bones must be final before we measure.
+    if bpy.context.mode != 'OBJECT':
+        bpy.ops.object.mode_set(mode='OBJECT')
+
+    results = []
+    for side, mode in sides:
+        if side not in geometry:
+            continue
+        base_name = "pectoral_base.{}".format(side)
+        name_01 = "pectoral_joint01.{}".format(side)
+        name_02 = "pectoral_joint02.{}".format(side)
+        # The SOURCE is pectoral_base - it is the renamed Daz lPectoral group and
+        # holds all the weight - but the two DESTINATIONS are joint01 and joint02.
+        # The split lands one bone further out than the source, leaving the base as
+        # weightless structure. That is deliberate: pectoral_base spans the inner
+        # 40% of the Daz bone, which measures out as sitting inside the ribcage,
+        # well behind where any breast vertex actually is.
+        result = _splitPectoralWeights(mesh_object, base_name, name_01, name_02,
+                                       geometry[side], mode,
+                                       split_low, split_high)
+        if result is None:
+            print("  pectoral {}: no source weights on '{}' - groups left empty"
+                  .format(side, base_name))
+            for name in (name_01, name_02):
+                if mesh_object.vertex_groups.get(name) is None:
+                    mesh_object.vertex_groups.new(name=name)
+            written = 0
+        else:
+            written, lo, hi = result
+            # lo/hi are raw t along the bone. Far from 0..1 is normal and worth
+            # seeing: on G3F the breast sits at roughly t 0.5..1.0 because the
+            # Daz bone starts behind the sternum.
+            print("  pectoral {}: moved {} verts onto '{}' + '{}' ({}, "
+                  "breast spans t {:.2f}..{:.2f} of the bone; '{}' left empty)"
+                  .format(side, written, name_01, name_02, mode, lo, hi, base_name))
+        # The base, the nipple and the whole fishing chain carry no weight, but keep
+        # empty groups so they survive an armature-modifier round trip and can be
+        # painted later. The fishing bones are a mechanism, not deformers.
+        weightless = ["nipple_joint.{}".format(side), base_name]
+        if build_fishing_chain:
+            weightless += ["pectoral_rod.{}".format(side),
+                           "pectoral_line.{}".format(side),
+                           "pectoral_hook.{}".format(side)]
+        for name in weightless:
+            if mesh_object is not None and mesh_object.vertex_groups.get(name) is None:
+                mesh_object.vertex_groups.new(name=name)
+        results.append((side, mode, created.get(side, []), written))
+
+    print("setupPectoralChain: {} side(s) built - {}"
+          .format(len(results),
+                  ", ".join("{}={}".format(s, m) for s, m, _c, _w in results) or "none"))
+    return results
+
+
+FISHING_CHAIN_SUFFIXES = ("pectoral_rod", "pectoral_line", "pectoral_hook")
+
+
+def _createFishingChain(ebones, side, base_eb, nipple_eb, rod_angle_degrees,
+                        created=None):
+    """
+    Build (or rebuild) one side's rod -> line -> hook off pectoral_base.
+
+    Mechanism bones - MCH in Rigify's vocabulary - carrying no weight. They exist
+    to drive the deforming chain: a rod cantilevered out and up from the base, a
+    line hanging vertically off its tip, and a hook on the nipple. Rotating the
+    rod swings the line like a weighted fishing line over water.
+
+    NOTE they are left with use_deform ON despite deforming nothing. The exporter
+    runs the FBX writer with use_armature_deform_only=True (exporter_unreal.py:1141),
+    which drops any bone whose use_deform is off - so marking these as non-deform
+    the usual Blender way would silently delete them from the export.
+
+    THE ANGLE IS THE ONLY INPUT; the line length is derived. The line can be
+    vertical AND land on the hook only if the rod tip is directly above the
+    nipple, so the two are not independent. Holding the rod's HORIZONTAL run
+    equal to base.tail -> nipple and raising only its vertical component puts the
+    tip on the nipple's X/Y exactly, making the line vertical by construction
+    rather than to within a rounding error.
+
+    ROLLS ARE COMPUTED, NOT INHERITED. Rod gets a level hinge (local X horizontal)
+    so rotating it about +X is a pure vertical swing; the line is given the rod's
+    hinge so both swing about ONE shared horizontal axis. The hook alone copies its
+    source, because it is meant to BE nipple_joint's frame. See the inline notes.
+
+    Note the line's X and Z are always horizontal whatever the angle - its Y is the
+    vertical one - and the hook never moves with the angle at all.
+
+    Existing rod/line/hook are removed first, leaf first so nothing is orphaned
+    mid-delete, which is what makes this safe to re-run at a new angle.
+
+    Returns (names, line_drop) or None if the geometry will not support a chain -
+    including a rod angle so small that the line would have no length.
+    """
+    for suffix in reversed(FISHING_CHAIN_SUFFIXES):        # hook, line, rod
+        old = ebones.get("{}.{}".format(suffix, side))
+        if old is not None:
+            ebones.remove(old)
+
+    B = base_eb.tail.copy()
+    tip = nipple_eb.head.copy()             # the original pectoral tail
+    V = tip - B
+    flat = Vector((V.x, V.y, 0.0))
+    run = flat.length
+    if run < 1e-6:
+        print("  pectoral {}: bone is vertical, no horizontal run - "
+              "fishing chain skipped".format(side))
+        return None
+
+    elevation = math.atan2(V.z, run)
+    tilted = elevation + math.radians(rod_angle_degrees)
+    if tilted >= math.radians(89.0):
+        print("  pectoral {}: rod angle {:.1f} deg would stand the rod up past "
+              "vertical - fishing chain skipped".format(side, rod_angle_degrees))
+        return None
+
+    rod_tip = B + flat + Vector((0.0, 0.0, run * math.tan(tilted)))
+    drop = rod_tip.z - tip.z
+    if drop < 1e-5:
+        # At 0 deg the rod tip lands ON the nipple and the line has no length -
+        # Blender deletes zero length bones, so the chain would come out missing a
+        # link rather than failing. Refuse instead.
+        print("  pectoral {}: rod angle {:.2f} deg leaves the line {:.6f} long - "
+              "too short to build, raise the angle".format(side, rod_angle_degrees, drop))
+        return None
+
+    UP = Vector((0.0, 0.0, 1.0))
+
+    rod = ebones.new("pectoral_rod.{}".format(side))
+    rod.head = B
+    rod.tail = rod_tip
+    rod.use_connect = False
+    rod.parent = base_eb
+
+    # ROLL, both bones, is chosen rather than inherited. Copying base_eb.roll (what
+    # this used to do) is meaningless: roll is a scalar measured against a frame
+    # built from the bone's OWN direction, so the same number on bones pointing
+    # different ways gives unrelated axes in world space. The rod sits 10 deg off
+    # the base and the line ~85 deg off it, so both were effectively arbitrary.
+    #
+    # Rod: level the hinge, exactly the rule levelFootRollHinges uses - local X
+    # horizontal, so rotating the rod about +X is a pure vertical swing, which is
+    # the gravity motion this whole construct exists to model.
+    #
+    # SIGN comes from the deforming chain, not from the cross product. Levelling
+    # leaves two candidates, +/-(rod_dir x UP), and both are equally level; taking
+    # the raw cross product picked one arbitrarily and it came out pointing the
+    # opposite way to pectoral_joint01's X. Matching joint01 instead keeps the two
+    # chains readable side by side, mirrors L/R for free (joint01's own X mirrors),
+    # and costs nothing - swinging about +X or -X is the same plane either way,
+    # only the sign of the rotation differs.
+    #
+    # If the two are near perpendicular the dot product cannot pick a side
+    # meaningfully, so fall back to the cross product handedness rather than let
+    # numerical noise decide.
+    rod_dir = (rod_tip - B).normalized()
+    hinge = rod_dir.cross(UP).normalized()
+    reference = ebones.get("pectoral_joint01.{}".format(side)) or base_eb
+    reference_x = reference.matrix.to_3x3() * Vector((1.0, 0.0, 0.0))
+    alignment = hinge.dot(reference_x)
+    if abs(alignment) > 1e-3 and alignment < 0.0:
+        hinge = -hinge
+    rod.align_roll(hinge.cross(rod_dir))
+
+    line = ebones.new("pectoral_line.{}".format(side))
+    line.head = rod_tip
+    line.tail = tip                         # straight down onto the nipple
+    line.use_connect = False
+    line.parent = rod
+
+    # Line: levelling cannot work here - it points straight down, so EVERY
+    # perpendicular is already horizontal and "make X level" picks no roll at all
+    # (the same degenerate case levelFootRollHinges guards against). Give it the
+    # rod's hinge instead, so rod and line swing about ONE shared horizontal axis,
+    # which is what makes a two link pendulum predictable to drive.
+    #
+    # align_roll aims local Z, so hand it the Z that belongs with the X we want:
+    # frames are right handed, Z = X x Y. Well conditioned because rod_x and the
+    # line's direction are perpendicular by construction.
+    rod_x = rod.matrix.to_3x3() * Vector((1.0, 0.0, 0.0))
+    line_dir = (tip - rod_tip).normalized()
+    line.align_roll(rod_x.cross(line_dir))
+
+    hook = ebones.new("pectoral_hook.{}".format(side))
+    hook.head = nipple_eb.head              # same coordinates as nipple_joint
+    hook.tail = nipple_eb.tail
+    hook.roll = nipple_eb.roll
+    hook.use_connect = False
+    hook.parent = line
+
+    names = [rod.name, line.name, hook.name]
+    if created is not None:
+        created += names
+    print("  pectoral {}: fishing chain - rod {:.1f} deg above the joint01 line, "
+          "line drops {:.4f}".format(side, rod_angle_degrees, drop))
+    return (names, drop)
+
+
+def rebuildPectoralFishingChains(armature_object=None, rod_angle_degrees=10.0,
+                                 sides=("L", "R")):
+    """
+    Re-cut the fishing chains on an already built rig, at a new rod angle.
+
+    Reads everything it needs off the rig itself - `pectoral_base` for the rod's
+    root and `nipple_joint` for where the hook goes - so it does not care how the
+    rig was produced or how long ago. Bones only; no vertex groups are touched,
+    which is safe precisely because the fishing chain never carries weight.
+
+    Returns a list of (side, line_drop) for the sides that were rebuilt.
+    """
+    if armature_object is None:
+        armature_object = bpy.data.objects.get("Armature")
+    if armature_object is None or armature_object.type != 'ARMATURE':
+        print("rebuildPectoralFishingChains: no armature named 'Armature' found")
+        return []
+
+    rebuilt = []
+    token = _beginEditBones(armature_object)
+    try:
+        ebones = armature_object.data.edit_bones
+        for side in sides:
+            base_eb = ebones.get("pectoral_base.{}".format(side))
+            nipple_eb = ebones.get("nipple_joint.{}".format(side))
+            if base_eb is None or nipple_eb is None:
+                print("  pectoral {}: needs pectoral_base and nipple_joint - "
+                      "skipped".format(side))
+                continue
+            result = _createFishingChain(ebones, side, base_eb, nipple_eb,
+                                         rod_angle_degrees)
+            if result is not None:
+                rebuilt.append((side, result[1]))
+    finally:
+        _endEditBones(token)
+
+    print("rebuildPectoralFishingChains: {} side(s) at {:.1f} deg"
+          .format(len(rebuilt), rod_angle_degrees))
+    return rebuilt
+
+
+# Named so the toggle can find its own work and never touch a hand made IK that
+# happens to sit on the same bone.
+FISHING_IK_CONSTRAINT_NAME = "VX Fishing IK"
+FISHING_STRETCH_CONSTRAINT_NAME = "VX Fishing Stretch"
+
+
+def _namedConstraint(pose_bone, constraint_type, name):
+    """One of OUR constraints on this bone, or None. Matched by name AND type, so
+    a hand made constraint of the same type is never picked up or removed."""
+    if pose_bone is None:
+        return None
+    for constraint in pose_bone.constraints:
+        if constraint.type == constraint_type and constraint.name == name:
+            return constraint
+    return None
+
+
+def _fishingIKConstraint(pose_bone):
+    """Our IK on this bone, or None. Matched by NAME, not just by type."""
+    return _namedConstraint(pose_bone, 'IK', FISHING_IK_CONSTRAINT_NAME)
+
+
+def _clearLegacyHookStretch(armature_object, side):
+    """
+    Drop the STRETCH_TO an earlier version put on pectoral_hook.
+
+    That was the wrong place for it: the stretching belongs on the CHAIN, so that
+    joint02's tail actually reaches the target, not on the target itself.
+    """
+    hook_pose = armature_object.pose.bones.get("pectoral_hook.{}".format(side))
+    if hook_pose is None:
+        return
+    for constraint in list(hook_pose.constraints):
+        if constraint.type == 'STRETCH_TO':
+            hook_pose.constraints.remove(constraint)
+            print("  fishing {}: removed the old hook STRETCH_TO".format(side))
+
+
+def enablePectoralFishingRig(armature_object=None, sides=("L", "R"),
+                             stretch_influence=(0.15, 0.25)):
+    """
+    Wire the fishing chain up so it drives the deforming chain.
+
+    Per side:
+
+    1. IK named FISHING_IK_CONSTRAINT_NAME on pectoral_joint02, target
+       pectoral_hook, chain_count 2. Bend only - use_stretch is OFF.
+
+       The IK goes on joint02, NOT on nipple_joint. Blender drives the CONSTRAINED
+       bone's tail to the target and counts the chain upward from it inclusive, so
+       joint02 + count 2 is exactly {joint01, joint02}. On nipple_joint it would be
+       {nipple_joint, joint02} and leave joint01 rigid.
+
+    2. STRETCH_TO named FISHING_STRETCH_CONSTRAINT_NAME on BOTH joint01 and
+       joint02, targeting pectoral_hook, at `stretch_influence` - a
+       (joint01, joint02) pair, tuned to (0.15, 0.25).
+
+       Reaching has to happen somehow: joint01 + joint02 ARE the segment from
+       base.tail to the nipple, and the hook sits on the nipple at rest, so
+       |base.tail -> hook| equals the chain length EXACTLY (0.13942 on G3F). The
+       chain is straight and fully extended at rest, and rotating the rod DOWN -
+       the gravity direction this whole construct models - puts the hook out of
+       reach:
+
+           rod -30 deg  0.15227 vs 0.13942 reach -> 0.0128 short
+           rod   0 deg  0.13942 vs 0.13942 reach -> singular
+           rod +30 deg  0.12732 vs 0.13942 reach -> bends fine
+
+       IK use_stretch was tried first and rejected: the solver distributes scaling
+       across the chain by its own rule, so joint01 grew as much as joint02 and the
+       deformation read wrong. (It also needs PoseBone.ik_stretch raised off its
+       0.0 default or the constraint flag silently does nothing - a trap worth
+       remembering if it is ever revisited. Both are zeroed here.)
+
+    3. pectoral_line gets use_inherit_rotation = False and its rotation locked.
+
+       That is the "line hangs straight down" behaviour, and it is a bone flag
+       rather than a constraint on purpose. The line's REST orientation is already
+       exactly vertical, so refusing to inherit rotation pins it there while its
+       head still follows the rod tip - a plumb line. It blocks EVERY ancestor, not
+       just the rod, so bending the spine does not tilt it either.
+
+       The lock is on the line ONLY. use_inherit_rotation blocks rotation arriving
+       from ancestors but not the bone's own, so a stray keyframe could still tip
+       it. The rod is the bone you drive, the hook's rotation is inert (IK reads its
+       HEAD, which its own rotation cannot move), and joint01/joint02 are IK driven.
+
+    nipple_joint gets NOTHING. It is a marker for pectoral_joint02's tail, kept for
+    readability and as a convenient place for the hook to borrow coordinates from.
+    Its use_deform is deliberately left ON despite it deforming nothing - the FBX
+    writer runs with use_armature_deform_only=True (exporter_unreal.py:1141) and
+    drops non-deform bones, so turning it off would delete it from the export.
+
+    No dependency cycle: the hook hangs off line -> rod -> pectoral_base while
+    joint02 hangs off joint01 -> pectoral_base. Siblings, so the IK target does not
+    depend on the bones the IK drives.
+
+    NOTE Blender-side only. Constraints and bone flags do not survive FBX export -
+    in Unreal this has to be rebuilt as a Control Rig or an anim graph node.
+
+    Returns a list of (side, ik_bone, target_bone) for the sides wired up.
+    """
+    if armature_object is None:
+        armature_object = bpy.data.objects.get("Armature")
+    if armature_object is None or armature_object.type != 'ARMATURE':
+        print("enablePectoralFishingRig: no armature named 'Armature' found")
+        return []
+
+    if bpy.context.mode != 'OBJECT':
+        bpy.ops.object.mode_set(mode='OBJECT')
+
+    wired = []
+    for side in sides:
+        ik_name = "pectoral_joint02.{}".format(side)
+        near_name = "pectoral_joint01.{}".format(side)
+        hook_name = "pectoral_hook.{}".format(side)
+        line_name = "pectoral_line.{}".format(side)
+
+        pose_bone = armature_object.pose.bones.get(ik_name)
+        near_pose = armature_object.pose.bones.get(near_name)
+        bones = armature_object.data.bones
+        if (pose_bone is None or near_pose is None
+                or hook_name not in bones or line_name not in bones):
+            print("  fishing {}: needs {}, {}, {} and {} - skipped"
+                  .format(side, near_name, ik_name, hook_name, line_name))
+            continue
+
+        _clearLegacyHookStretch(armature_object, side)
+
+        ik = _fishingIKConstraint(pose_bone)
+        if ik is None:
+            ik = pose_bone.constraints.new('IK')
+            ik.name = FISHING_IK_CONSTRAINT_NAME
+        ik.target = armature_object
+        ik.subtarget = hook_name
+        ik.chain_count = 2
+        ik.use_stretch = False
+
+        # IK stretch OFF, on both halves of the setting. The solver distributes
+        # scaling across every bone in the chain by its own rule, which is what
+        # made the deformation look wrong - joint01 grew as much as joint02 even
+        # though only the outer bone needs to make up the gap.
+        near_pose.ik_stretch = 0.0
+        pose_bone.ik_stretch = 0.0
+
+        # STRETCH_TO on BOTH chain bones instead, so the reach can be shared
+        # between them by influence rather than distributed by the solver's own
+        # rule. Appended AFTER the IK, and Blender evaluates the stack in order,
+        # so these win on aim and length while the IK still sets the bend.
+        #
+        # rest_length is measured per bone as its head -> hook distance AT REST,
+        # not the bone's own length. For joint02 those happen to be equal (its
+        # tail IS the hook), but for joint01 the hook is a whole bone further on,
+        # so using its own length would read as "already stretched 2x" and it
+        # would double the moment the constraint switched on.
+        #
+        # INFLUENCE IS THE DIAL. At 1.0 on joint01 the constraint fully aims that
+        # bone at the hook too, both bones point at the same place, and the chain
+        # straightens out - which defeats the IK bend entirely. Partial influence
+        # on both is what lets them share the stretch and still bend, hence the
+        # 0.5 default.
+        #
+        # NO_VOLUME keeps it a pure lengthwise stretch. Switch to 'VOLUME_XZX' if
+        # you want the breast to thin as it extends - more soft-tissue-like, but
+        # it couples the stretch into the mesh's width.
+        for stretch_pose, influence in ((near_pose, stretch_influence[0]),
+                                        (pose_bone, stretch_influence[1])):
+            stretch = _namedConstraint(stretch_pose, 'STRETCH_TO',
+                                       FISHING_STRETCH_CONSTRAINT_NAME)
+            if stretch is None:
+                stretch = stretch_pose.constraints.new('STRETCH_TO')
+                stretch.name = FISHING_STRETCH_CONSTRAINT_NAME
+            stretch.target = armature_object
+            stretch.subtarget = hook_name
+            # Written every run, not only on create: the tuned values live in the
+            # `stretch_influence` default, so the code is the source of truth and
+            # re-running enable re-applies them rather than preserving whatever is
+            # currently on the bone.
+            stretch.influence = influence
+            stretch.rest_length = (bones[hook_name].head_local
+                                   - bones[stretch_pose.name].head_local).length
+            stretch.volume = 'NO_VOLUME'
+
+        bones[line_name].use_inherit_rotation = False
+        line_pose = armature_object.pose.bones.get(line_name)
+        if line_pose is not None:
+            line_pose.lock_rotation = (True, True, True)
+            line_pose.lock_rotation_w = True
+
+        wired.append((side, ik_name, hook_name))
+        print("  fishing {}: '{}' on '{}' -> '{}' (chain 2, STRETCH_TO on "
+              "joint01+joint02 at influence {}), "
+              "'{}' pinned vertical and locked"
+              .format(side, FISHING_IK_CONSTRAINT_NAME, ik_name, hook_name,
+                      tuple(stretch_influence), line_name))
+
+    bpy.context.scene.update()
+    print("enablePectoralFishingRig: {} side(s) wired".format(len(wired)))
+    return wired
+
+
+def disablePectoralFishingRig(armature_object=None, sides=("L", "R")):
+    """
+    Undo enablePectoralFishingRig, leaving the bones themselves alone.
+
+    Removes ONLY the named IK, so a hand made IK on the same bone survives. Puts
+    back everything enable changed: ik_stretch to 0, the line inheriting rotation
+    again and unlocked. Bones, weights and hierarchy are untouched.
+
+    Returns a list of sides that had something to remove.
+    """
+    if armature_object is None:
+        armature_object = bpy.data.objects.get("Armature")
+    if armature_object is None or armature_object.type != 'ARMATURE':
+        print("disablePectoralFishingRig: no armature named 'Armature' found")
+        return []
+
+    if bpy.context.mode != 'OBJECT':
+        bpy.ops.object.mode_set(mode='OBJECT')
+
+    cleared = []
+    for side in sides:
+        ik_name = "pectoral_joint02.{}".format(side)
+        near_name = "pectoral_joint01.{}".format(side)
+        line_name = "pectoral_line.{}".format(side)
+        bones = armature_object.data.bones
+        touched = False
+
+        pose_bone = armature_object.pose.bones.get(ik_name)
+        ik = _fishingIKConstraint(pose_bone)
+        if ik is not None:
+            pose_bone.constraints.remove(ik)
+            touched = True
+
+        stretch = _namedConstraint(pose_bone, 'STRETCH_TO',
+                                   FISHING_STRETCH_CONSTRAINT_NAME)
+        if stretch is not None:
+            pose_bone.constraints.remove(stretch)
+            touched = True
+
+        for name in (near_name, ik_name):
+            chain_pose = armature_object.pose.bones.get(name)
+            if chain_pose is not None and chain_pose.ik_stretch:
+                chain_pose.ik_stretch = 0.0
+                touched = True
+
+        _clearLegacyHookStretch(armature_object, side)
+
+        if line_name in bones and not bones[line_name].use_inherit_rotation:
+            bones[line_name].use_inherit_rotation = True
+            touched = True
+        line_pose = armature_object.pose.bones.get(line_name)
+        if line_pose is not None:
+            line_pose.lock_rotation = (False, False, False)
+            line_pose.lock_rotation_w = False
+
+        if touched:
+            cleared.append(side)
+            print("  fishing {}: IK removed, '{}' back to inheriting rotation"
+                  .format(side, line_name))
+
+    bpy.context.scene.update()
+    print("disablePectoralFishingRig: {} side(s) cleared".format(len(cleared)))
+    return cleared
+
+
+def toggleFishingRig(armature_object=None, sides=("L", "R"),
+                     stretch_influence=(0.15, 0.25)):
+    """
+    Off -> on -> off. Returns (is_enabled_now, affected_sides).
+
+    "Currently on" means the named IK exists on ANY side, so a half wired rig - one
+    side built, or a side skipped for missing bones - toggles OFF first rather than
+    stacking a second copy onto the side that already had one.
+    """
+    if armature_object is None:
+        armature_object = bpy.data.objects.get("Armature")
+    if armature_object is None or armature_object.type != 'ARMATURE':
+        print("toggleFishingRig: no armature named 'Armature' found")
+        return (False, [])
+
+    enabled = any(
+        _fishingIKConstraint(
+            armature_object.pose.bones.get("pectoral_joint02.{}".format(side)))
+        is not None
+        for side in sides)
+
+    if enabled:
+        return (False, disablePectoralFishingRig(armature_object, sides))
+    wired = enablePectoralFishingRig(armature_object, sides, stretch_influence)
+    return (bool(wired), [side for side, _ik, _target in wired])
+
+
+def _splitPectoralWeights(mesh_object, source_name, near_name, far_name, geometry,
+                          mode, low, high, percentile=0.05):
+    """
+    Split source_name's weights between near_name and far_name across [low, high].
+
+    The source is a THIRD group, not one of the destinations: on the pectoral
+    chain the weight lives on joint01 (the renamed Daz lPectoral) but belongs on
+    joint01 and joint02. Whatever is read is removed from the source afterwards,
+    so influence is moved rather than duplicated. If source_name IS one of the
+    destinations the removal is skipped, which keeps the two-bone case working.
+
+    `mode` picks what "how far along" means - see setupPectoralChain:
+        "axial"  scalar projection onto the bone axis (ignores off-axis distance)
+        "radial" straight-line distance from the chain's head (spherical shells)
+
+    NORMALISED AGAINST THE WEIGHTED VERTICES, NOT THE BONE. The first version
+    divided by bone length and assumed the bone spans the geometry it weights.
+    That holds for the twists - thigh.L really does span the thigh - but not
+    here. Measured on G3F, lPectoral originates behind the sternum, near the
+    spine, and the breast does not begin until 42% along it:
+
+        axial t: min 0.42  p10 0.51  med 0.76  p90 1.00  max 1.02
+
+    so a [0.25, 0.75] band on raw t put the MEDIAN vertex at u = 1.02, clamped
+    to 1.0, and joint01 came out empty. Instead the raw t values are collected
+    first, the `percentile`..(1 - `percentile`) range of them is mapped onto
+    [0, 1], and the band is applied to that. One stray vertex therefore cannot
+    skew the range, and the result is independent of where Daz chose to root the
+    bone or how long it is.
+
+    low/high stay fractions of the BREAST's own extent, so the two sides remain
+    directly comparable across the axial/radial A/B.
+
+    All samples are read before anything is written, because name_01 is both the
+    source and one of the destinations.
+
+    Returns (verts_written, lo, hi) where lo/hi are the raw t values that got
+    mapped to 0 and 1, or None if name_01 has no weights.
+    """
+    groups = mesh_object.vertex_groups
+    source = groups.get(source_name)
+    if source is None:
+        return None
+
+    head, direction, length = geometry
+    if length <= 0.0:
+        return None
+
+    matrix = mesh_object.matrix_world
+    source_index = source.index
+
+    samples = []
+    for v in mesh_object.data.vertices:
+        for g in v.groups:
+            if g.group == source_index and g.weight > 0.0:
+                offset = (matrix * v.co) - head
+                if mode == "radial":
+                    t = offset.length / length
+                else:
+                    t = offset.dot(direction) / length
+                samples.append((v.index, g.weight, t))
+                break
+
+    if not samples:
+        return None
+
+    # Percentile rather than min/max so a single stray weighted vertex - a stray
+    # from a morph, or bleed from a neighbouring group - cannot stretch the range
+    # and flatten the gradient for everything else.
+    ordered = sorted(t for _i, _w, t in samples)
+    last = len(ordered) - 1
+    lo = ordered[int(percentile * last)]
+    hi = ordered[int((1.0 - percentile) * last)]
+    extent = hi - lo
+    band = high - low
+
+    group_near = groups.get(near_name) or groups.new(name=near_name)
+    group_far = groups.get(far_name) or groups.new(name=far_name)
+    for v_index, weight, t in samples:
+        if extent > 0.0:
+            s = (t - lo) / extent          # 0..1 across the breast itself
+            u = (s - low) / band if band > 0.0 else 0.5
+        else:
+            u = 0.5                        # every vertex at the same depth
+        u = max(0.0, min(1.0, u))
+        group_near.add([v_index], weight * (1.0 - u), 'REPLACE')
+        group_far.add([v_index], weight * u, 'REPLACE')
+
+    # Move, do not copy: the source keeps its weights otherwise and every vertex
+    # ends up with 2x influence, which shows up as the mesh inflating when the
+    # chain rotates.
+    if source_name not in (near_name, far_name):
+        source.remove([v_index for v_index, _w, _t in samples])
+
+    return (len(samples), lo, hi)
+
+
+def _buildJiggleBone(mesh_object, armature_object, joint_name, end_name,
+                     base_indices, top_indices, parent_name, source_groups,
+                     radius, max_weight, forward_only=True, side_sign=None,
+                     end_length=0.02, flatten_head_z=True,
+                     vertical_reach=(1.0, 1.0), lower_fullness=0.0,
+                     lower_limit_indices=None, lower_limit_overshoot=1.0,
+                     plateau=0.0, plateau_below=None,
+                     upper_scale=1.0, peak_depth=1.0):
+    """
+    Build one mesh-derived jiggle bone plus its _end stub, and borrow it weight.
+
+    Shared by setupStomachBone and setupButtBones - and shaped to take the rib
+    bones too, which sit in extra_bones_torso.json waiting for the same treatment.
+
+        <joint_name>  head = centre of `base_indices` (a ring of verts, averaged,
+                             which lands inside the body)
+                      tail = centre of `top_indices` (the surface point)
+        <end_name>    head = that surface point
+                      tail = a short stub further along the same direction
+
+    The aim is free: the joint's tail IS the end's head, so it already points at it.
+
+    `flatten_head_z` snaps the head to the tail's height, making the bone perfectly
+    horizontal. The legacy VXMod builder does this for both stomach and butt
+    (difeomorphic_workflow_armature_from_other_vertices.py:25, :47, :54) and it
+    gives the physics a clean swing axis instead of one tilted by whatever the
+    vertex ring averaged to.
+
+    BOTH BONES GET use_deform = True, the _end included even though it carries no
+    weight. The FBX writer runs with use_armature_deform_only=True
+    (exporter_unreal.py:1864, :2064) and drops bones by that FLAG, not by whether
+    they actually have weight - and Blender only spares a non-deforming bone if it
+    has a DEFORMING CHILD, which a leaf never has. Without the flag the stub
+    vanishes from the export and Unreal draws the joint as a nub, not a bone.
+    (`dontExportJointEnds` is NOT what governs this - declared at __init__.py:219
+    and never read anywhere.)
+
+    WEIGHTS are moved, not added: what the joint gains is subtracted from the
+    source, so total influence per vertex is unchanged and the mesh does not shift
+    at rest. Three tests decide what is in range:
+
+      radius      distance from the SURFACE point, smoothstep falloff to zero at
+                  the edge so there is no hard seam.
+      forward     the vertex must be on the tail side of the head, tested against
+                  the bone's own axis. Cheap, since the axis is already to hand.
+      vertical_reach
+                  (up, down) as fractions of radius, applied to the z offset.
+                  (1.0, 1.0) is a sphere; the butt uses (0.55, 1.25) so the
+                  region reaches under the glutes instead of climbing into the
+                  lumbar spine.
+      lower_limit_indices
+                  verts along an anatomical floor. Their mean height overrides
+                  vertical_reach[1] - a measured boundary instead of a guessed
+                  radius, and seamless because the curve arrives at zero rather
+                  than being cut off.
+      lower_limit_overshoot
+                  how far PAST that floor the falloff actually reaches, as a
+                  multiple of the span. 1.0 puts zero exactly on the boundary -
+                  which means the boundary itself gets NO weight. Above 1.0
+                  pushes the zero below it so the boundary keeps a real value,
+                  at the cost of a little spill past it.
+      upper_scale scales the weight AT THE APEX, ramping smoothly to full value
+                  at the lower limit. 1.0 is flat. Below 1.0 the region gets
+                  lighter the higher it goes, which is what keeps a glute bone
+                  off the lumbar back while staying strong at the crease. Needs
+                  lower_limit_indices - without a measured floor there is no
+                  height to ramp between.
+      peak_depth  where the vertical profile maxes, in units of the apex->limit
+                  span. 1.0 peaks ON the limit, which makes the limit itself the
+                  heaviest band. Below 1.0 moves the peak up into the body so the
+                  limit lands on the falling side and reads softer.
+      plateau_below
+                  the plateau to ease toward BELOW the tail, blended in by depth.
+                  None keeps `plateau` everywhere. 0.0 spreads the horizontal
+                  taper across the whole radius down there, which is what softens
+                  the lower edges without moving the boundary or touching the
+                  region above the tail.
+      plateau     fraction of the radius held at FULL value before the taper
+                  starts. 0.0 is a pure smoothstep from the tip, which peaks on
+                  the tip and sheds weight all the way down. Raising it flattens
+                  the middle so the region reads evenly instead of as a hot spot.
+      lower_fullness
+                  0.0 leaves the falloff alone. Higher values fatten it below
+                  the apex - weight only, the region's extent does not move -
+                  which is what the under-glute crease needs.
+      side_sign   +1 keeps only x > 0, -1 only x < 0, None disables it. REQUIRED
+                  for paired bones: .L and .R borrow from the SAME source group, so
+                  without it an overlapping radius lets both claim a vertex, the
+                  second REPLACE silently clobbers the first, and the source has
+                  weight taken twice but credited once. Midline verts (x ~= 0) fall
+                  to neither side, which is correct - the cleft should not jiggle
+                  sideways.
+
+    IDEMPOTENT. Weight borrowed by an earlier run is handed back before anything is
+    taken, so re-running Manny FULL neither stacks nor strands vertices that a
+    smaller radius no longer covers. Note that folds in any weight painted onto the
+    joint by hand, treating it as borrowed.
+
+    Returns (created_bone_names, verts_touched, weight_moved).
+    """
+    if mesh_object is None or mesh_object.type != 'MESH':
+        print("  jiggle '{}': no mesh given".format(joint_name))
+        return ([], 0, 0.0)
+    if armature_object is None or armature_object.type != 'ARMATURE':
+        print("  jiggle '{}': no armature given".format(joint_name))
+        return ([], 0, 0.0)
+
+    vertices = mesh_object.data.vertices
+    needed = max(list(base_indices) + list(top_indices))
+    if needed >= len(vertices):
+        print("  jiggle '{}': mesh has {} verts, needs index {} - wrong topology, "
+              "skipped".format(joint_name, len(vertices), needed))
+        return ([], 0, 0.0)
+
+    centre = getCenter(list(base_indices), mesh_object)
+    surface = getCenter(list(top_indices), mesh_object)
+    if flatten_head_z:
+        centre.z = surface.z
+    axis = surface - centre
+    if axis.length < 1e-6:
+        print("  jiggle '{}': head and tail are coincident - skipped".format(joint_name))
+        return ([], 0, 0.0)
+    axis = axis.normalized()
+
+    crease_span = 0.0
+    # A mesh-derived floor beats a guessed radius. Given verts along an anatomical
+    # boundary - the gluteal crease, say - take their mean height and set the
+    # DOWNWARD reach so the smoothstep hits exactly zero there. The boundary then
+    # IS the crease: nothing below is in range, and because the falloff arrives at
+    # zero rather than being chopped off, there is no seam along it.
+    if lower_limit_indices:
+        limit_needed = max(lower_limit_indices)
+        if limit_needed >= len(vertices):
+            print("  jiggle '{}': limit index {} past the end of the mesh - ignored"
+                  .format(joint_name, limit_needed))
+        else:
+            limit_z = getCenter(list(lower_limit_indices), mesh_object).z
+            crease_span = surface.z - limit_z      # raw, for the upper_scale ramp
+            span = crease_span * lower_limit_overshoot
+            if span > 1e-6:
+                vertical_reach = (vertical_reach[0], span / radius)
+                print("  jiggle '{}': lower limit from {} verts at z {:.4f} -> reach "
+                      "down {:.4f} m ({:.2f} x radius)"
+                      .format(joint_name, len(lower_limit_indices), limit_z, span,
+                              vertical_reach[1]))
+            else:
+                print("  jiggle '{}': limit verts are at or above the tail - ignored"
+                      .format(joint_name))
+
+    # --- bones -------------------------------------------------------------
+    created = []
+    token = _beginEditBones(armature_object)
+    try:
+        ebones = armature_object.data.edit_bones
+        parent = ebones.get(parent_name)
+        if parent is None:
+            print("  jiggle '{}': parent '{}' not in the rig - skipped"
+                  .format(joint_name, parent_name))
+            return ([], 0, 0.0)
+
+        for name in (end_name, joint_name):          # leaf first, never orphan
+            old = ebones.get(name)
+            if old is not None:
+                ebones.remove(old)
+
+        joint = ebones.new(joint_name)
+        joint.head = centre
+        joint.tail = surface
+        joint.roll = parent.roll
+        joint.use_connect = False
+        joint.use_deform = True
+        joint.parent = parent
+
+        end = ebones.new(end_name)
+        end.head = surface
+        end.tail = surface + axis * end_length
+        end.roll = joint.roll
+        end.use_connect = False
+        end.use_deform = True        # see the docstring - without this it is dropped
+        end.parent = joint
+
+        created = [joint.name, end.name]
+    finally:
+        _endEditBones(token)
+
+    if not created:
+        return ([], 0, 0.0)
+
+    # --- weights -----------------------------------------------------------
+    if bpy.context.mode != 'OBJECT':
+        bpy.ops.object.mode_set(mode='OBJECT')
+
+    groups = mesh_object.vertex_groups
+    target = groups.get(joint_name) or groups.new(name=joint_name)
+    if groups.get(end_name) is None:
+        groups.new(name=end_name)                # empty, keeps group/bone parity
+
+    source_indices = {}
+    for group_name in source_groups:
+        group = groups.get(group_name)
+        if group is None:
+            print("  jiggle '{}': source group '{}' not on the mesh - ignored"
+                  .format(joint_name, group_name))
+            continue
+        source_indices[group.index] = group
+    if not source_indices:
+        print("  jiggle '{}': no source groups found, created with an empty group"
+              .format(joint_name))
+        return (created, 0, 0.0)
+
+    # Reclaim first - see the docstring. Given back PROPORTIONALLY to whatever the
+    # sources still hold at that vertex, which is exact rather than approximate:
+    # the borrow took max*falloff of EACH source, so what is left is still in the
+    # original proportions, and splitting the total the same way restores them.
+    # Only when no source has any weight left does it fall back to source_groups[0].
+    primary = source_indices[list(source_indices)[0]]
+    reclaimed = []
+    for v in vertices:
+        target_weight = 0.0
+        shares = []
+        for g in v.groups:
+            if g.group == target.index:
+                target_weight = g.weight
+            elif g.group in source_indices:
+                shares.append((source_indices[g.group], g.weight))
+        if target_weight > 0.0:
+            reclaimed.append((v.index, target_weight, shares))
+    for v_index, weight, shares in reclaimed:
+        total = sum(w for _group, w in shares)
+        if total > 0.0:
+            for group, w in shares:
+                group.add([v_index], w + weight * (w / total), 'REPLACE')
+        else:
+            primary.add([v_index], weight, 'ADD')
+        target.remove([v_index])
+
+    # Read every sample before writing - the sources are about to be edited.
+    #
+    # HORIZONTAL AND VERTICAL ARE SEPARATE PROFILES, multiplied together. They were
+    # one radial distance before, and that could not express what a glute needs: any
+    # single metric centred on the bone tip is strongest AT the tip and weakest at
+    # the crease, which is the opposite of the shape. No amount of reshaping one
+    # curve fixes that - the two axes want different profiles, so they get them.
+    #
+    #   horizontal   smoothstep out to `radius`, held flat inside `plateau`
+    #   vertical     ramps from `upper_scale` at the apex to FULL at the lower
+    #                limit, then falls to zero across the overshoot below it;
+    #                above the apex it fades out over vertical_reach[0] * radius
+    #
+    # With no lower_limit_indices there is no measured floor to ramp between, so it
+    # falls back to the old symmetric decay and the stomach behaves as before.
+    up_span = radius * vertical_reach[0]
+    samples = []
+    for v in vertices:
+        if side_sign is not None and v.co.x * side_sign <= 0.0:
+            continue
+        offset = v.co - surface
+
+        # --- vertical ---
+        if crease_span > 0.0:
+            if offset.z > 0.0:                      # above the apex
+                if up_span <= 0.0 or offset.z > up_span:
+                    continue
+                a = offset.z / up_span
+                vertical = upper_scale * (1.0 - (3.0 * a * a - 2.0 * a * a * a))
+            else:
+                # Depth in units of the apex->limit span: 0 at the apex, 1 at the
+                # limit, beyond that below it. The profile PEAKS at `peak_depth`
+                # and decays from there to zero at `lower_limit_overshoot`.
+                #
+                # peak_depth < 1 puts the maximum ABOVE the limit, so the limit
+                # itself sits on the falling side. Ramping monotonically to the
+                # limit makes the limit the peak by construction, which reads as a
+                # heavy band right on the crease.
+                d = -offset.z / crease_span
+                if d <= peak_depth:
+                    r = d / peak_depth if peak_depth > 0.0 else 1.0
+                    vertical = upper_scale + (1.0 - upper_scale) * (
+                        3.0 * r * r - 2.0 * r * r * r)
+                else:
+                    tail = lower_limit_overshoot - peak_depth
+                    if tail <= 0.0:
+                        continue
+                    b = (d - peak_depth) / tail
+                    if b > 1.0:
+                        continue
+                    vertical = 1.0 - (3.0 * b * b - 2.0 * b * b * b)
+        else:
+            reach = vertical_reach[0] if offset.z > 0.0 else vertical_reach[1]
+            span = radius * reach
+            if span <= 0.0:
+                continue
+            a = abs(offset.z) / span
+            if a > 1.0:
+                continue
+            vertical = 1.0 - (3.0 * a * a - 2.0 * a * a * a)
+        if vertical <= 0.0:
+            continue
+
+        # --- horizontal ---
+        horizontal_distance = math.sqrt(offset.x * offset.x + offset.y * offset.y)
+        if horizontal_distance > radius:
+            continue
+        t = horizontal_distance / radius
+        # A softer horizontal edge BELOW the tail only. What reads as a hard edge is
+        # a narrow transition band, not the curve shape - smoothstep is already flat
+        # at both ends - so the fix is to widen the band, which means shrinking the
+        # plateau. Above the tail it is left alone; below it eases toward
+        # `plateau_below` (0.0 = the ramp spans the whole radius).
+        #
+        # Blended BY DEPTH rather than switched at z = 0, or the two plateaus would
+        # disagree at mid radius and leave a seam right along the tail's height.
+        effective_plateau = plateau
+        if plateau_below is not None and offset.z < 0.0 and crease_span > 0.0:
+            pd = max(0.0, min(1.0, -offset.z / crease_span))
+            pd = 3.0 * pd * pd - 2.0 * pd * pd * pd
+            effective_plateau = plateau + (plateau_below - plateau) * pd
+        if effective_plateau > 0.0 and t <= effective_plateau:
+            horizontal = 1.0
+        else:
+            u = ((t - effective_plateau) / (1.0 - effective_plateau)
+                 if effective_plateau < 1.0 else 1.0)
+            u = max(0.0, min(1.0, u))
+            horizontal = 1.0 - (3.0 * u * u - 2.0 * u * u * u)
+        if horizontal <= 0.0:
+            continue
+
+        if forward_only and (v.co - centre).dot(axis) <= 0.0:
+            continue
+
+        falloff = horizontal * vertical
+        if falloff <= 0.0:
+            continue
+        for g in v.groups:
+            if g.group in source_indices and g.weight > 0.0:
+                samples.append((v.index, source_indices[g.group], g.weight,
+                                g.weight * max_weight * falloff))
+
+    # Each source is reduced by its OWN take, but the target is written ONCE with
+    # the SUM. Writing per sample would REPLACE the target repeatedly on any vertex
+    # that has several sources, keeping only the last take while every source had
+    # already been debited - weight would vanish. Harmless while there was one
+    # source; a real bug the moment the thighs were added alongside pelvis.
+    moved = 0.0
+    per_source = {}
+    takes = {}
+    for v_index, source_group, weight, take in samples:
+        source_group.add([v_index], weight - take, 'REPLACE')
+        takes[v_index] = takes.get(v_index, 0.0) + take
+        per_source[source_group.name] = per_source.get(source_group.name, 0.0) + take
+        moved += take
+    for v_index, total_take in takes.items():
+        target.add([v_index], total_take, 'REPLACE')
+
+    breakdown = ", ".join("%s %.3f" % (n, w) for n, w in
+                          sorted(per_source.items(), key=lambda kv: -kv[1]))
+    print("  jiggle '{}': {} verts borrowed {:.4f} (radius {:.3f}, max {:.2f}{}{}{})"
+          .format(joint_name, len(takes), moved, radius, max_weight,
+                  ", front only" if forward_only else "",
+                  ", side %+d" % side_sign if side_sign else "",
+                  ", reclaimed %d" % len(reclaimed) if reclaimed else ""))
+    print("      from: {}".format(breakdown or "nothing"))
+    return (created, len(takes), moved)
+
+
+def setupCyclopsBone(mesh_object, armature_object, parent_name="head",
+                     bone_name="cyclops_joint01", end_name="cyclops_end",
+                     length=0.04, end_length=0.02):
+    """
+    Aim helper for the eyes: one bone between them, on the skin surface.
+
+    Intended to be pointed at a look-at target, with lEye and rEye taking their
+    rotation from it. NO WEIGHTS - it deforms nothing and never should.
+
+    HEAD comes from cyclops_joint01_base, a surface point between the eyes above the
+    nose. Deliberately not the midpoint of lEye/rEye, which sit inside the skull -
+    this bone is meant to be seen, and a helper buried in the head is useless.
+
+    DIRECTION does come from the eye bones, averaged. That is a different question
+    from position: the gaze axis is exactly what the eye bones already encode, so
+    inheriting it means the helper points where the eyes point on any figure. Falls
+    back to world forward (-Y) if they are missing.
+
+    use_deform is ON despite there being no weights - the FBX writer runs with
+    use_armature_deform_only=True and drops bones by that flag, so without it the
+    helper never reaches Unreal. Same trap as nipple_joint and the fishing chain.
+
+    NOTE the constraints themselves are Unreal-side work. Blender constraints do not
+    survive FBX export, so this only places the scaffold; the aiming and the
+    copy-rotation belong in Control Rig.
+
+    Also note: both eyes copying ONE bone's rotation gives PARALLEL gaze, not
+    convergence. Real convergence needs a per-eye yaw offset of opposite sign, ideally
+    driven by target distance. Fine for distant targets, visibly wall-eyed up close.
+
+    The _end stub exists for the same reason as stomach_end and butt_end: Unreal
+    draws a childless bone as a nub rather than a bone, and this one is meant to be
+    looked at. It carries no weight either, and needs its own use_deform - Blender
+    only spares a non-deforming bone when it has a DEFORMING child, which a leaf
+    never has.
+
+    Returns the created bone names, or [].
+    """
+    if mesh_object is None or mesh_object.type != 'MESH':
+        print("setupCyclopsBone: no mesh given")
+        return []
+    if armature_object is None or armature_object.type != 'ARMATURE':
+        print("setupCyclopsBone: no armature given")
+        return []
+
+    indices = list(cyclops_joint01_base)
+    if max(indices) >= len(mesh_object.data.vertices):
+        print("setupCyclopsBone: needs index {} but the mesh has {} - wrong topology, "
+              "skipped".format(max(indices), len(mesh_object.data.vertices)))
+        return []
+    position = getCenter(indices, mesh_object)
+
+    created = []
+    token = _beginEditBones(armature_object)
+    try:
+        ebones = armature_object.data.edit_bones
+        parent = ebones.get(parent_name)
+        if parent is None:
+            print("setupCyclopsBone: parent '{}' not in the rig - skipped"
+                  .format(parent_name))
+            return []
+
+        forward = Vector((0.0, 0.0, 0.0))
+        for eye_name in ("lEye", "rEye"):
+            eye = ebones.get(eye_name)
+            if eye is not None and (eye.tail - eye.head).length > 1e-6:
+                forward += (eye.tail - eye.head).normalized()
+        if forward.length < 1e-6:
+            forward = Vector((0.0, -1.0, 0.0))     # figure forward, see the docstring
+            print("  cyclop: no usable lEye/rEye - falling back to world forward")
+        forward = forward.normalized()
+
+        for name in (end_name, bone_name):          # leaf first, never orphan
+            old = ebones.get(name)
+            if old is not None:
+                ebones.remove(old)
+
+        eb = ebones.new(bone_name)
+        eb.head = position
+        eb.tail = position + forward * length
+        eb.roll = parent.roll
+        eb.use_connect = False
+        eb.use_deform = True
+        eb.parent = parent
+
+        end = ebones.new(end_name)
+        end.head = eb.tail.copy()
+        end.tail = eb.tail + forward * end_length
+        end.roll = eb.roll
+        end.use_connect = False
+        end.use_deform = True       # see the docstring - a leaf needs its own flag
+        end.parent = eb
+        created = [eb.name, end.name]
+    finally:
+        _endEditBones(token)
+
+    if not created:
+        return []
+
+    if bpy.context.mode != 'OBJECT':
+        bpy.ops.object.mode_set(mode='OBJECT')
+    for name in created:
+        if mesh_object.vertex_groups.get(name) is None:
+            mesh_object.vertex_groups.new(name=name)  # empty, keeps group/bone parity
+
+    print("setupCyclopsBone: {} at {} off '{}', pointing {} ({:.3f} + {:.3f} long)"
+          .format(created, indices, parent_name,
+                  tuple(round(c, 3) for c in forward), length, end_length))
+    return created
+
+
+def setBoneTailToVertices(mesh_object, armature_object, bone_name, vertex_indices,
+                          min_length=1e-5):
+    """
+    Aim a bone at a mesh location by moving its tail onto it.
+
+    Takes a LIST of vertex indices and averages them through getCenter, matching
+    every other consumer of the vertex tables - a single-element list is fine and
+    is how lower_jaw_tail is expressed. Indices themselves NEVER appear at a call
+    site: they live in difeomorphic_workflow_init_custom_vertex_indices.py so that
+    supporting another figure (G3M, G8F, G9) is a matter of swapping that module,
+    not hunting hardcoded numbers through the pipeline.
+
+    For bones whose direction is anatomical rather than structural - lowerJaw wants
+    to point at the chin, and no parent/child relationship expresses that. Head,
+    parenting and length-to-children are untouched; only the tail moves.
+
+    Object-local coordinates, matching getCenter and the jiggle bones. Sound only
+    because the builder creates "Armature" at the origin and the body sits there
+    too - the same assumption the rest of this module makes.
+
+    NOTE the roll number is left alone, so it now means a different orientation in
+    world space: roll is measured against a frame built from the bone's OWN
+    direction, which just changed. Nothing in blender_perfect_roll_deltas covers
+    lowerJaw, so it keeps its Daz roll either way, but re-check if the jaw's axes
+    start looking wrong.
+
+    Returns (moved, degrees_turned) - moved is False if it could not be done.
+    """
+    if mesh_object is None or mesh_object.type != 'MESH':
+        print("  tail-to-vertex: no mesh given")
+        return (False, 0.0)
+    if armature_object is None or armature_object.type != 'ARMATURE':
+        print("  tail-to-vertex: no armature given")
+        return (False, 0.0)
+    if not vertex_indices:
+        print("  tail-to-vertex: '{}' given no vertices - skipped".format(bone_name))
+        return (False, 0.0)
+    needed = max(vertex_indices)
+    if needed >= len(mesh_object.data.vertices):
+        print("  tail-to-vertex: '{}' needs index {} but the mesh has {} - wrong "
+              "topology, skipped".format(bone_name, needed,
+                                         len(mesh_object.data.vertices)))
+        return (False, 0.0)
+
+    target = getCenter(list(vertex_indices), mesh_object)
+
+    turned = 0.0
+    token = _beginEditBones(armature_object)
+    try:
+        eb = armature_object.data.edit_bones.get(bone_name)
+        if eb is None:
+            print("  tail-to-vertex: '{}' not in the rig - skipped".format(bone_name))
+            return (False, 0.0)
+        before = eb.tail - eb.head
+        after = target - eb.head
+        if after.length < min_length:
+            print("  tail-to-vertex: {} sits on '{}' head - skipped"
+                  .format(list(vertex_indices), bone_name))
+            return (False, 0.0)
+        if before.length >= min_length:
+            turned = math.degrees(before.normalized().angle(after.normalized()))
+        eb.tail = target
+    finally:
+        _endEditBones(token)
+
+    print("  tail-to-vertex: '{}' tail -> {}, turned {:.3f} deg, length {:.4f}"
+          .format(bone_name, list(vertex_indices), turned, after.length))
+    return (True, turned)
+
+
+def setupStomachBone(mesh_object, armature_object, parent_name="spine_02",
+                     source_groups=("spine_02",), radius=0.16, max_weight=0.35,
+                     forward_only=True, end_length=0.02):
+    """
+    Belly jiggle bone: stomach_joint01 -> stomach_end, off spine_02.
+
+    Central, so no side test. Borrows from spine_02, which is what owns the belly.
+    See _buildJiggleBone for the mechanics and the export/idempotency notes.
+    """
+    created, touched, moved = _buildJiggleBone(
+        mesh_object, armature_object, "stomach_joint01", "stomach_end",
+        stomach_base, stomach_top, parent_name, source_groups,
+        radius, max_weight, forward_only=forward_only, side_sign=None,
+        end_length=end_length)
+    print("setupStomachBone: {}".format(created or "nothing built"))
+    return (created, touched, moved)
+
+
+def setupButtBones(mesh_object, armature_object, parent_name="pelvis",
+                   source_groups=("pelvis", "thigh.{side}",
+                                  "thigh_twist_01.{side}"),
+                   radius=0.22, max_weight=0.50,
+                   forward_only=True, end_length=0.02,
+                   vertical_reach=(0.55, 1.25), lower_fullness=0.0,
+                   lower_limit_overshoot=1.55, plateau=0.20, plateau_below=0.0,
+                   upper_scale=0.55, peak_depth=0.45):
+    """
+    Glute jiggle bones: butt_joint01.L/.R -> butt_end.L/.R, off pelvis.
+
+    PARENTED TO pelvis, not thigh and not spine_01. The glutes originate on the
+    ilium and sacrum - they do not rotate with the femur, they are compressed and
+    stretched as it moves past them, and that compression is the ordinary skin
+    weights' job. On thigh the bone would be thrown around by every leg swing. On
+    spine_01 it would pick up the lumbar bend as well, since spine_01 is a child of
+    pelvis. Walking pelvis bob and tilt is exactly the input the physics wants.
+
+    BORROWS PER SIDE from pelvis AND the thigh, "{side}" being substituted at
+    call time. pelvis alone is not enough, and the screenshot showed why: over
+    the butt surface and flank verts pelvis holds 4.109 of 6.000 (68%), but
+    those verts are all up at the cheek apex. Down at the gluteal fold pelvis
+    has faded out and thigh.L / thigh_twist_01.L own the region - and since the
+    borrow is source_weight * max_weight * falloff, there was nothing there to
+    take, however good the falloff. That is why the crease stayed near zero
+    while the apex went green.
+
+    SIDE TEST IS LOAD BEARING here in a way it is not for the stomach. Both sides
+    borrow from the SAME pelvis group, so without it an overlapping radius lets
+    both claim a vertex and the second REPLACE clobbers the first. .L is +x and .R
+    is -x, matching the legacy extra_bones_butt.json head positions.
+    """
+    # Defined in difeomorphic_workflow_init_custom_vertex_indices.py alongside the
+    # other sets. Looked up rather than imported by name so the behaviour simply
+    # falls back to the plain radius while they are absent.
+    crease = {"L": globals().get("butt_crease_L"),
+              "R": globals().get("butt_crease_R")}
+    results = []
+    for side, base, top, sign in (("L", butt_base_L, butt_top_L, 1.0),
+                                  ("R", butt_base_R, butt_top_R, -1.0)):
+        results.append(_buildJiggleBone(
+            mesh_object, armature_object,
+            "butt_joint01.{}".format(side), "butt_end.{}".format(side),
+            base, top, parent_name,
+            [g.format(side=side) for g in source_groups],
+            radius, max_weight, forward_only=forward_only, side_sign=sign,
+            end_length=end_length, vertical_reach=vertical_reach,
+            lower_fullness=lower_fullness,
+            lower_limit_indices=crease.get(side),
+            lower_limit_overshoot=lower_limit_overshoot, plateau=plateau,
+            plateau_below=plateau_below,
+            upper_scale=upper_scale, peak_depth=peak_depth))
+    created = [n for c, _t, _m in results for n in c]
+    print("setupButtBones: {}".format(created or "nothing built"))
+    return results
 
 
 def switchVertexGroupsToManny(mesh_object, armature_object=None, delete_unmapped=False):
