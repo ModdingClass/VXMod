@@ -98,9 +98,19 @@ if "bpy" in locals():
 
     imp.reload(tools_duplicate_object_remove_mats_shapekeys)
     imp.reload(helper_vgroups)
+    # DATA MODULES FIRST - order here is load-bearing.
+    #
+    # importer_g3f_difeomorphic and difeomorphic_workflow both pull these in with
+    # `from ... import *`, which COPIES the arrays into their own globals at import
+    # time. Reloading a consumer BEFORE its data module makes the consumer re-copy the
+    # data that is still stale, and the edit looks like it did nothing - you then have
+    # to restart Blender to see it. This bit the vertex-index file too; it was listed
+    # after both of its consumers.
+    imp.reload(g3f.difeomorphic_workflow_init_custom_vertex_indices)
+    imp.reload(g3f.difeomorphic_workflow_init_custom_face_indices)
+    imp.reload(g3f.difeomorphic_workflow_init_geografts)
     imp.reload(g3f.importer_g3f_difeomorphic)
     imp.reload(g3f.difeomorphic_workflow)
-    imp.reload(g3f.difeomorphic_workflow_init_custom_vertex_indices)
     imp.reload(tools_import_export_vertex_groups_json)
     imp.reload(legacy_tools_import_export_shape_keys_json)
     imp.reload(tools_import_export_materials_json)
@@ -130,6 +140,8 @@ else:
     from .g3f import importer_g3f_difeomorphic
     from .g3f import difeomorphic_workflow
     from .g3f import difeomorphic_workflow_init_custom_vertex_indices
+    from .g3f import difeomorphic_workflow_init_custom_face_indices
+    from .g3f import difeomorphic_workflow_init_geografts
     from . import tools_import_export_vertex_groups_json
     from . import legacy_tools_import_export_shape_keys_json
     from . import tools_import_export_materials_json
@@ -263,6 +275,32 @@ class VXMOD_vars(bpy.types.PropertyGroup) :
          "Follows the breast's shape more closely, but a vertex far off the axis "
          "reads as further along than the linear version says it is"),
     ]
+    # Read by "G3F -> VX body". Changing it after a conversion does nothing until the
+    # next run - like the pectoral options below, this is a build option, not something
+    # that acts on an existing body retroactively.
+    materialConversionMode = bpy.props.EnumProperty(
+        name="Materials",
+        description="How the Daz surfaces are turned into materials on the VX body",
+        items=[
+            ('DAZ', "Daz",
+             "Keep the stock Daz surfaces exactly as imported - no renaming, no "
+             "merging. They are still copied first, so the originals on the "
+             "Difeomorphic body are not touched. Shares the modern mat_ naming with "
+             "FullBody for the censor and genital placeholder slots"),
+            ('LEGACY', "Legacy",
+             "The original vxmod conversion: collapse the Daz surfaces onto the 21 "
+             "body_* game material names, then sort the slots into legacy engine "
+             "index order. The eye interior is folded into body_head01 and hidden "
+             "inside the skull. Keeps the body_* names throughout - the legacy engine "
+             "tables key off them"),
+            ('FULLBODY', "FullBody",
+             "Merge everything onto mat_fullbody, with two exceptions: the eyelashes "
+             "keep mat_eyelashes because they need translucency in Unreal, and the "
+             "eye interior (Cornea, Pupils, Sclera, Irises, EyeMoisture) goes to "
+             "DONT_RENDER so Unreal can skip it outright"),
+        ],
+        default='FULLBODY',
+    )
     pectoralWeightModeL = bpy.props.EnumProperty(
         name="L",
         description="How the left pectoral's weights are handed from joint02 to joint03",
@@ -313,6 +351,12 @@ class VXMOD_CONVERTER_OT_PanelDifeomorphicToVXMod(bpy.types.Panel):
         step1_box.label(text="Select the Difeomorphic G3F armature")
         step1_box.operator('vxmod.convert_g3fdifeo_to_vxmodf',
                            text='G3F'+u'→'+'VX body', icon='OBJECT_DATA')
+
+        # Directly under the button that consumes it. Three options, so expand=True
+        # still fits on one row and the active mode is readable without opening a
+        # dropdown - same treatment as the pectoral options in step 2.
+        step1_box.label(text="Convert Materials Pipeline:")
+        step1_box.row(align=True).prop(vxmod, 'materialConversionMode', expand=True)
 
         # --- Step 2: the current path. One button does armature + bind + face collapse
         #     + vertex groups, and finds both objects on its own.
@@ -1248,8 +1292,9 @@ class CONVERT_OT_G3F_Body_Difeomorphic(bpy.types.Operator):
     def execute(self, context):
         obj_object = bpy.context.selected_objects[0] ####<--Fix
         bpy.context.scene.objects.active = obj_object
-        print('Imported name: ', obj_object.name)        
-        convertG3FDifeomorphicToVXModFBody()
+        print('Imported name: ', obj_object.name)
+        convertG3FDifeomorphicToVXModFBody(
+            context.scene.vxmod.materialConversionMode)
         return {'FINISHED'}
 
 

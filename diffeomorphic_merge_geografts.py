@@ -287,17 +287,62 @@ def getAnatomies(context, cob):
                             "Geografts selected and target active.")
 
     for aob in anatomies:
-        if aob.data.DazVertexCount != ncverts:
+        if not geograftFitsBody(aob, cob):
             if cob.data.DazVertexCount == len(aob.data.vertices):
                 msg = ("Meshes selected in wrong order.\n"
                        "Geografts selected and target active.   ")
             else:
                 msg = ("Geograft %s fits mesh with %d vertices,      \n"
-                       "but %s has %d vertices." %
-                       (aob.name, aob.data.DazVertexCount, cob.name, ncverts))
+                       "but %s has %d vertices (base %d)." %
+                       (aob.name, aob.data.DazVertexCount, cob.name, ncverts,
+                        cob.data.DazVertexCount))
             raise GeograftError(msg)
 
     return anatomies
+
+
+def geograftFitsBody(aob, cob):
+    """Whether geograft `aob` can be merged into body `cob` right now.
+
+    Two ways to fit:
+
+    1. aob.DazVertexCount == the body's LIVE vertex count. This is Diffeomorphic's own
+       rule. It covers a pristine body, and it also covers a STACKED geograft - one
+       authored against the mesh that RESULTS from merging an earlier geograft.
+
+    2. aob.DazVertexCount == the body's OWN DazVertexCount, once the body has grown past
+       it. DazVertexCount is written once at import (geometry.py setHideInfoMesh) and is
+       never updated by a merge, so a body that has already absorbed a geograft still
+       carries the ORIGINAL figure's vertex count - which is exactly what a second
+       base-level geograft was authored against.
+
+    Rule 2 is what makes merging geografts ONE AT A TIME work. Under rule 1 alone the
+    first merge grows the live count and every later base-level graft is rejected, even
+    though its graft pairs are still perfectly valid.
+
+    They stay valid because this merge is non-destructive: it only APPENDS the graft's
+    vertices and then welds pairs, and the weld loop runs high-to-low
+    (`reversed(dazGraftGroupAfterJoinDict.items())`) so the vertex each weld removes is
+    always one of the appended ones. Base indices 0..N-1 are never renumbered - which the
+    existing loop already depends on, since it keeps looking up body indices between
+    welds.
+
+    Rule 2 deliberately requires live > base, so it only ever relaxes the check on a body
+    that has actually been merged into. On a pristine body rule 1 already applies, and a
+    genuine mismatch is still rejected.
+    """
+    live_count = len(cob.data.vertices)
+    if aob.data.DazVertexCount == live_count:
+        return True
+
+    base_count = cob.data.DazVertexCount
+    if base_count and aob.data.DazVertexCount == base_count and live_count > base_count:
+        print("geograftFitsBody: %s targets the base figure (%d verts); %s has already "
+              "grown to %d. Accepting - base indices are preserved by the "
+              "non-destructive merge." % (aob.name, base_count, cob.name, live_count))
+        return True
+
+    return False
 
 
 class GeograftMergerBase(MaterialMerger):
