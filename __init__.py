@@ -48,6 +48,7 @@ from .face_default import *
 from .clear_armature_rotation import *
 from .tools_message_box import *
 
+from .exporter_morph_bin import *
 from .exporter_unreal import *
 from .importer_g3f import *
 from .importer_g3f_morphs import *
@@ -239,6 +240,8 @@ class VXMOD_vars(bpy.types.PropertyGroup) :
     reorientBonesOnExportUnreal = bpy.props.BoolProperty(name="reorientBonesOnExportUnreal", description="Reorient bones (Unreal friendly) before exporting",    default=True)
     exportShapekeys = bpy.props.BoolProperty(name="exportShapekeys", description="Export shapekeys for base and subdivided mesh (uncheck for exporting faster/DEBUG)",    default=True)
     cacheShapekeys = bpy.props.BoolProperty(name="cacheShapekeys", description="Cache subdivided shape key data to disk. Speeds up subsequent exports by skipping subdivision",    default=True)
+    exportMorphBin = bpy.props.BoolProperty(name="exportMorphBin", description="Write shape keys to a sparse .vxmb side-car INSTEAD OF into the FBX. The exported FBX carries geometry only, so Unreal no longer pre-reads hundreds of blend shape channels; the VersaMap plugin injects the morphs after the import. Keep the .vxmb next to the .fbx",    default=False)
+    exportMorphBinNormals = bpy.props.BoolProperty(name="exportMorphBinNormals", description="Include per-vertex normal deltas in the .vxmb. Costs Blender one normals pass per shape key per LOD and roughly doubles the file, but Unreal then skips recomputing morph normals at build time. Leave OFF until the Unreal build step is measured to be the bottleneck",    default=False)
     #
     cleanupTempMeshesMode = bpy.props.EnumProperty(
         name="Cleanup Temp Meshes",
@@ -298,8 +301,18 @@ class VXMOD_vars(bpy.types.PropertyGroup) :
              "keep mat_eyelashes because they need translucency in Unreal, and the "
              "eye interior (Cornea, Pupils, Sclera, Irises, EyeMoisture) goes to "
              "DONT_RENDER so Unreal can skip it outright"),
+            ('SPLITBODY', "SplitBody",
+             "One material per body region instead of one for the whole body: "
+             "mat_face, mat_torso, mat_legs, mat_arms, mat_mouth, plus mat_gens for "
+             "the genital geograft, mat_censor for the censor region, and the same "
+             "mat_eyelashes and DONT_RENDER exceptions FullBody makes. Each region "
+             "then samples only its own UDIM tile texture in Unreal, instead of the "
+             "shader sampling all six and discarding five. Giving the geograft and "
+             "the censor region their own slots also lets Unreal hide them by "
+             "swapping a material, with no UV-tile test or vertex-colour mask in the "
+             "shader at all"),
         ],
-        default='FULLBODY',
+        default='SPLITBODY',
     )
     pectoralWeightModeL = bpy.props.EnumProperty(
         name="L",
@@ -603,6 +616,15 @@ class EXPORT_PT_VXModToUnreal(bpy.types.Panel):
         sub.active = vxmod.exportShapekeys
         sub.separator()
         sub.prop(vxmod,'cacheShapekeys',text="Shapekeys Caching")
+        sub = extra_export_box.row(align=True)
+        sub.active = vxmod.exportShapekeys
+        sub.separator()
+        sub.prop(vxmod,'exportMorphBin',text="Morphs to Side-Car, not FBX (.vxmb)")
+        sub = extra_export_box.row(align=True)
+        sub.active = vxmod.exportShapekeys and vxmod.exportMorphBin
+        sub.separator()
+        sub.separator()
+        sub.prop(vxmod,'exportMorphBinNormals',text="Side-Car Normals")
         #
         row_extra=extra_export_box.row(align=True)
         col = row_extra.column()
@@ -982,14 +1004,62 @@ class CONVERT_OT_G3F_Body_Difeomorphic_manny_full(bpy.types.Operator):
         #    exporter_unreal.py:421 is satisfied.
         bindMeshToArmature(mesh_object, vx_armature)
 
+        # 2b. Geografts ride along from here on. They are separate objects the conversion
+        #     parented to the body, and until this existed Manny FULL touched ONLY
+        #     body_subdiv_cage - so a graft kept its Daz vertex group names while the
+        #     body's were renamed, and kept an ARMATURE modifier pointing at the graft's
+        #     own Daz rig.
+        #
+        #     Measured on a real conversion: body 127 Manny-named groups, graft still
+        #     ['lThighTwist', 'rThighTwist', 'lThighBend', 'rThighBend', 'pelvis'].
+        #     Four of those five have no Manny bone, and 'pelvis' happens to be spelled
+        #     the same in both name spaces - so at merge time the graft would have ended
+        #     up rigidly following the pelvis and ignoring the legs.
+        #
+        #     bindGeograftToArmature, not bindMeshToArmature: the latter clears the
+        #     parent, and the graft's parent is what exporter_unreal.get_geograft_children
+        #     walks to find it.
+        geograft_children = findGeograftChildren(mesh_object)
+        if geograft_children:
+            print("Manny FULL: {0} geograft(s) will be converted alongside the body: "
+                  "{1}".format(len(geograft_children),
+                               [g.name for g in geograft_children]))
+        for geograft in geograft_children:
+            bindGeograftToArmature(geograft, vx_armature)
+
         # 3. Rename the vertex groups to match the bones, using the same map the armature
         #    builder used. This MUST come before the collapse: step 1 already renamed the
         #    bones, so until the groups catch up the two are in different name spaces and
         #    a rule targeting foot.L would find the bone but not the group.
+        #
+        #    Every mesh bound to the rig goes through the SAME map, or the body and its
+        #    geografts end up in different name spaces and the join at export produces a
+        #    union of Manny groups and orphaned Daz ones.
         switchVertexGroupsToManny(mesh_object, vx_armature)
+        for geograft in geograft_children:
+            switchVertexGroupsToManny(geograft, vx_armature)
 
         # 4. Collapse the face rig into head / lowerJaw and the heel + metatarsals into
         #    the foot, then delete those bones and reparent the survivors.
+        #
+        #    GEOGRAFTS FIRST, and without deleting. mergeBonesIntoTargets skips any rule
+        #    whose bones are no longer in the rig, so once the body pass has deleted them
+        #    a later graft pass would silently collapse nothing. Ordering it this way
+        #    matters for a graft that actually carries collapsible weights - vampire teeth
+        #    on the jaw, say - even though the genitalia graft's five groups touch no
+        #    collapse rule.
+        #    Each graft gets only the rules whose SOURCES it actually has.
+        #    mergeBonesIntoTargets creates a missing TARGET group, so the unfiltered rule
+        #    set gave geograft_0_genz four empty ones - head, lowerJaw, foot.L, foot.R -
+        #    on a mesh that only carries thigh, thigh_twist and pelvis weights.
+        for geograft in geograft_children:
+            graft_rules = collapseRulesForMesh(geograft)
+            if not graft_rules:
+                print("Manny FULL: {0} has no collapsible weights - skipping the "
+                      "collapse".format(geograft.name))
+                continue
+            mergeBonesIntoTargets(geograft, vx_armature, rules=graft_rules,
+                                  delete_bones=False)
         mergeBonesIntoTargets(mesh_object, vx_armature)
 
         # 5. Twist bones: take them out of the chain (Manny wants them as leaves), build

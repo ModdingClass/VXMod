@@ -12,6 +12,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - The addon lives inside Blender's addons directory and is activated via Blender preferences
 - No external build system, linting, or test suite exists — testing is done manually inside Blender
 - Windows-only: uses `winsound` and `ctypes.wintypes` in some modules
+- **Requires the sibling addon `io_game_mod_tiny_tools` ("Game Mod Tiny Tools", operator prefix `gmtt`).** `exporter_unreal.py` calls `bpy.ops.gmtt.object_strip_and_clean(...)` on seven sites to strip shape keys / vertex groups / materials / modifiers from the temporary export meshes. `check_export_dependencies()` at the top of `export_to_unreal_v2()` checks for it up front (export time, not registration — addon enable order is not guaranteed, so a load-time check could report a dependency that is about to appear). It is the only gmtt operator this addon uses, out of the 23 it provides
+- **numpy is a real dependency** (pip-installed into Blender's Python, not the stock bundle) and must be pinned to `1.18.5` for CPython 3.5. `exporter_morph_bin.py` is the only module that calls it; `armature.py` merely imports it. Full story and bootstrap steps: `NumpyDependency.md`
 
 ## Architecture
 
@@ -62,6 +64,9 @@ All panels appear in the 3D View Tool Shelf under the "VXMod" tab category:
 - Export folder path is stored in `vxmod.exportFolderPathUnreal`
 - G3F body compatibility is checked by vertex count (17418 for body-only, 18105 with gens)
 - Subdivision vertex matching tables are built and saved as JSON to correlate base mesh vertices with subdivided mesh vertices — see "Subdivision Output Files" section below for full details
+- **Shape key export produces two side files, and they do different jobs.** `<name>_shapekeys_subdiv_cache.bin` (the *Shapekeys Caching* checkbox) is internal: dense, absolute positions for every hi-res vertex, so a re-export can skip re-subdividing each key. `SKM_<name>.vxmb` (the *Morphs to Side-Car* checkbox, `exporter_morph_bin.py`) is for Unreal: sparse deltas per LOD, read by the VersaMap plugin. With it ticked the shape keys are **removed from the LOD meshes** before the FBX is written (`strip_shape_keys_for_fbx()`, which goes through the existing `gmtt.object_strip_and_clean` helper — note `Object.shape_key_clear()` is 2.8+ and does not exist in 2.79), so the FBX carries geometry only — Blender's FBX exporter has no option for that, and a side-car next to an FBX that still holds its blend shapes would save nothing. Leave caching on — the side-car reads the keys the cache restores.
+- `sort_faces_by_material()` calls `report_material_face_order()`, which prints each LOD's material slot list, its face runs and a verdict (grouped+ascending / grouped-but-reversed / not grouped). **Both LODs print OK** — the addon is NOT the source of the section-order problem Unreal showed on `SKM_BelaTest`. Parsing the exported FBX directly confirmed it: identical material connection order and identical ascending face runs on both LOD meshes. The reversal was a FOSSIL inside the Unreal asset, preserved by `SetMaterialOrderByName` on every reimport. Full write-up in the UE project at `Docs/SplitBodyMaterialMode.md`, ROOT CAUSE FOUND. Keep the diagnostic: it is what proves the export side innocent in one line next time.
+- `compute_basis_fingerprint()` hashes the base mesh **and** the source shape keys (cache version 2). Before that it hashed only base vertex positions, so editing a shape key without touching the body left every cache check passing and silently served stale subdivided keys.
 
 ## Subdivision Output Files
 
@@ -188,16 +193,85 @@ Source armature: `F:\Assets\Daz3D\Projects\G3F_SI\custom_json_files\armature_vxn
 
 ---
 
+## Session State — materials, censor, geografts (2026-09-04)
+
+**Actively being worked on:** the `G3F→VX body` material pipeline and everything that hangs
+off it — conversion modes, geograft handling, the censor mechanism, and the UE-side
+opacity graph that consumes it.
+
+**Committed as `3b18dc7`** on `manny_armature` (NOT pushed): the three conversion modes,
+generic geograft discovery + `geograft_<N>_<short>` renaming, the two name normalizers,
+and `geograftFitsBody`.
+
+**UNCOMMITTED on top of it** — 6 files, ~640 insertions. All verified by dry-run against
+extracted functions; **none of it has been run in Blender yet.**
+
+### Active files
+
+| file | what changed since `3b18dc7` |
+|---|---|
+| `g3f/importer_g3f_difeomorphic.py` | vertex-colour censor, `mat_genital` removed, placeholder pass deleted, `DazMaskGroup` derivation, geograft helpers, UV layer rename |
+| `__init__.py` | Manny FULL runs the weight pipeline over geografts; reload order fixed |
+| `g3f/difeomorphic_workflow.py` | `collapseRulesForMesh` |
+| `g3f/difeomorphic_workflow_init_custom_face_indices.py` | hardcoded 82-index array deleted; dict now an override, empty |
+| `g3f/difeomorphic_workflow_init_geografts.py` | `material_role` doc rewritten for the two-scheme resolution |
+| `CLAUDE.md` | this session's documentation |
+
+### Next steps
+
+1. **Restart Blender** — two new modules were added and the `imp.reload` order changed; a
+   reload cannot fix its own stale load.
+2. Run `G3F→VX body` (FULLBODY) + `Manny FULL`, and check the console for:
+   - `renameGeograftUvLayer: geograft_0_genz uv layer "Default UVs" -> "UVMap"`
+   - `paintCensorVertexColors: 82 faces cyan from ['Genesis 3 Female Genitalia.001']`
+   - `Manny FULL: 1 geograft(s) will be converted alongside the body`
+3. Verify on the graft: **5** Manny-named vertex groups (no empty `head`/`lowerJaw`/
+   `foot.*`), ARMATURE modifier reads `Armature`, parent still `body_subdiv_cage`.
+4. Verify on the body: 3 material slots (`mat_fullbody`, `mat_eyelashes`, `DONT_RENDER`),
+   graft on `mat_fullbody`.
+5. Pose a thigh — the gens should follow the leg, not stay pinned to the pelvis.
+6. **Commit.**
+7. UE side: set `Show Censor?` **Default Value to 1.0**. Currently 0, which hides both the
+   body's censor faces AND the gens — a hole. This is also the first test that actually
+   exercises the vertex-colour path; every state tested so far took a constant branch.
+8. Optional cleanup in `ML_G3FSkin_Base`: move `OneMinus` before the `Show_Gens_Flag`
+   declaration so the name stops meaning its own inverse, and delete the orphaned
+   `Constant_17`.
+
+### New conventions established this session
+
+- **Two material naming schemes, never three.** `LEGACY` keeps `body_*` (the legacy engine
+  tables key off them); `DAZ` and `FULLBODY` share `mat_*`. The schemes share no name, so
+  duplicate slots are structurally impossible.
+- **A `material_role` names the geograft CATEGORY, not a material** — it resolves through
+  the per-mode table, so one role gives different materials per scheme.
+- **Index data never appears at a call site.** Face indices got their own module,
+  separate from vertex indices, because mixing index spaces in one namespace reads fine
+  and then silently indexes the wrong array.
+- **Prefer DERIVING over tabulating.** The censor faces came out of `DazMaskGroup`
+  byte-identical to the hand-collected list; the table is now only an override.
+- **Name a thing for the axis it varies on.** `censor_faces_by_geograft` (region varies by
+  graft) not by material (which varies by mode). `UV_Region_Index`, not `Tile_Index` — the
+  `+1` means it is NOT the UDIM tile number.
+- **`imp.reload` order is load-bearing** — data modules before their `import *` consumers.
+
+---
+
 ## Material conversion modes (`G3F→VX body`)
 
-`convertG3FDifeomorphicToVXModFBody(material_mode='FULLBODY')` in
+`convertG3FDifeomorphicToVXModFBody(material_mode='SPLITBODY')` in
 `g3f/importer_g3f_difeomorphic.py`. The mode comes from `vxmod.materialConversionMode`,
 an `EnumProperty` rendered `expand=True` under the label **"Convert Materials
 Pipeline:"**, directly beneath the `G3F→VX body` button in step 1 of the panel.
 
-`FULLBODY` is the default in **both** places — the property and the function signature —
-so "the default" means one thing. `LEGACY` is still the fallback for an *unrecognised*
+`SPLITBODY` is the default in **both** places — the property and the function signature
+— so "the default" means one thing. `LEGACY` is still the fallback for an *unrecognised*
 mode string, which is a separate concern from being the default.
+
+The default moved from `FULLBODY` to `SPLITBODY` on 2026-09-05. `FULLBODY` is unchanged
+and still selectable; it is simply no longer what a fresh conversion produces. Anything
+that assumed a converted body carries `mat_fullbody` now needs to say which mode it
+means.
 
 Like the pectoral options, this is a **build option** — changing it after a conversion
 does nothing until the next run.
@@ -206,7 +280,8 @@ does nothing until the next run.
 |------|--------------|
 | `DAZ` | Nothing. Stock Daz surfaces stay exactly as imported. They are still **copied** first (that step is shared), so the originals on the Difeomorphic body are never touched. |
 | `LEGACY` | The original conversion, unchanged — collapse onto the 21 `body_*` names, pad the table, sort slots into legacy engine index order. |
-| `FULLBODY` | Everything onto `mat_fullbody`, with two exceptions. **Default.** |
+| `FULLBODY` | Everything onto `mat_fullbody`, with two exceptions. |
+| `SPLITBODY` | One material per body REGION, plus own slots for the graft and censor. Nine slots. **Default.** |
 
 ### FullBody exceptions
 
@@ -269,8 +344,9 @@ against `body_*` game names, which never carry `-N`. Pre-existing, LEGACY-only.
 
 ### Material names, per mode
 
-**TWO schemes, not three.** `materialNamesForMode()` returns `LEGACY_MATERIAL_NAMES` for
-`LEGACY` and `MODERN_MATERIAL_NAMES` for everything else — `DAZ` and `FULLBODY` share the
+**THREE schemes.** `materialNamesForMode()` returns `LEGACY_MATERIAL_NAMES` for `LEGACY`,
+`SPLIT_MATERIAL_NAMES` for `SPLITBODY`, and `MODERN_MATERIAL_NAMES` for everything else —
+`DAZ` and `FULLBODY` share the
 modern scheme.
 
 | Role | LEGACY | DAZ / FULLBODY |
@@ -278,8 +354,27 @@ modern scheme.
 | whole body | — (no single body material) | `mat_fullbody` |
 | eyelashes | `body_eyelash01` | `mat_eyelashes` |
 | eye interior | — (folded into `body_head01`) | `DONT_RENDER` |
-| censor | `body_main_censor` | `mat_censor` |
-| genital | `body_genital01` | `mat_genital` |
+| genital geograft | `body_genital01` | **`mat_fullbody`** — shares the body material |
+| censor | `body_main_censor` | `mat_censor` — *unused, vertex colour instead* |
+
+**A role names the geograft CATEGORY, not a material**, so the same role resolves
+differently per scheme. `genital` → `body_genital01` in LEGACY, `mat_fullbody` in the
+modern one. There is **no `mat_genital`**.
+
+That is what the Unreal graph requires: body and geograft live in one merged mesh under
+**one material**, and the shader tells them apart by **UV tile** (the graft's island sits
+at U ∈ [-1,0), the body at [0,1)) rather than by material slot. Two slots would be a
+second section and a second draw call buying nothing. After the merge Blender folds both
+onto the same slot automatically, since a join merges slots by material datablock.
+
+**DAZ skips geograft materials entirely.** "Keep the stock Daz surfaces exactly as
+imported" has to cover the graft too, or the body keeps Daz surfaces while the graft gets
+a `mat_` material the body does not even have.
+
+**There is no placeholder material pass.** `ensurePlaceholderMaterials` is gone — both
+things it reserved slots for are obsolete (censor is vertex colour, the genital graft
+shares `mat_fullbody`). LEGACY is unaffected: `ensureLegacyGameMaterials` still creates
+`body_main_censor` and `body_genital01` from the frozen 21-name table.
 
 **LEGACY's names are frozen.** They are the keys the legacy engine tables look up —
 `dictionary_materials.stock_materials` (duplicated in `helper_material_lists_lookup`, which
@@ -305,252 +400,92 @@ called with `body_teeth01` / `body_main_censor`, which simply do not exist in th
 modes, so it self-disables there through its existing missing-material guard. Those strings
 belong to the legacy engine's namespace, not Blender's.
 
-### Placeholders — created in EVERY mode
+### Censor region: VERTEX COLOUR, not a material
 
-`ensurePlaceholderMaterials(ob, material_mode)` guarantees the censor and genital slots
-exist on the body mesh, **under the mode's own names**. Unreal swaps a censor / genital
-material in at runtime and can only do that if the slot already exists.
+**Current strategy.** The censor region is marked in vertex colour and masked in the
+Unreal material. In every mode except `SPLITBODY` there is no `mat_censor` — those 82
+faces stay on `mat_fullbody` with
+everything else.
 
-It takes the mode precisely because the two schemes must never both appear on one mesh:
-creating the modern names unconditionally would leave LEGACY carrying `mat_censor` AND
-`body_main_censor`, two slots for one region.
-
-Runs **last**, after the mode-specific pass and after the unused-slot sweep, so nothing
-downstream can delete them. In LEGACY it is a no-op — `ensureLegacyGameMaterials` already
-made both.
-
-Face state per mode:
-
-| Role | DAZ | LEGACY | FULLBODY |
-|---|---|---|---|
-| censor | `mat_censor`, 82 faces* | `body_main_censor`, 82 faces* | `mat_censor`, 82 faces* |
-| genital | `mat_genital`, empty | `body_genital01`, faces (Genitalia remap) | `mat_genital`, empty |
-
-\* censor faces only when a geograft with a table entry is present — otherwise the slot
-exists but stays empty. See below.
-
-The genital material carrying faces in LEGACY is deliberate — LEGACY is frozen as "the
-current conversion" and its `Genitalia → body_genital01` remap runs first. The separate
-**geograft object** is assigned the mode's genital material in all three modes; existing
-behaviour, and it keeps that region separable.
-
-### Censor faces (`assignCensorFaces`)
-
-The censor material is **not** empty — it gets 82 polygons on the body mesh. The faces
-come off whatever material otherwise owned them (`body_main_upper` in LEGACY,
-`mat_fullbody` in FULLBODY, the stock Daz surface in DAZ).
-
-**Which faces depends on the GEOGRAFT, not on the material mode.** The censor region has
-to cover the graft's footprint and the body around it, so a different geograft implies a
-different face set. The table is keyed by the geograft's **object name**, which is what
-the conversion has in hand:
-
-```
-censor_faces_genesis_3_female_genitalia = [...]          # the stock Daz G3F graft
-censor_faces_by_geograft = {
-    "Genesis 3 Female Genitalia": censor_faces_genesis_3_female_genitalia,
-}
-```
-
-`assignCensorFaces(ob, material_mode, geograft_name)` is passed the name of the
-**original** geograft, not the clone — `bpy.ops.object.duplicate` names the clone
-`"... .001"`, which would never match a key.
-
-**No geograft, or one with no table entry → nothing is assigned**, with a console line
-saying so. The slot still exists (empty), so Unreal keeps its guarantee. Borrowing a face
-set from a different geograft would put the censor in the wrong place, which is worse
-than an empty slot.
-
-**Adding a geograft is TWO edits in different files.** A new array plus registry entry in
-`difeomorphic_workflow_init_custom_face_indices.py`, *and* the lookup in
-`convertG3FDifeomorphicToVXModFBody`, which currently hardcodes
-`"Genesis 3 Female Genitalia"` as the only geograft it searches for. Doing only the first
-leaves the new array unreachable. That is the point: the region has to be its own slot for Unreal to swap
-what renders there without touching the rest of the body.
-
-**Ordering is load-bearing.** `assignCensorFaces` runs:
-- **after** the unused-slot sweep — created any earlier, `body_main_censor` would be
-  empty at sweep time and get pruned before it could be filled;
-- **after** `sortLegacyMaterialSlots` — which is why it looks the slot up by name rather
-  than trusting an index captured before the sort.
-
-The arrays are named for the **geograft**, not for a material — the material name varies
-by mode while the face set varies by geograft, so those are two independent axes and
-neither belongs in the other's name. Putting a material name (let alone a legacy one)
-into a per-figure index file would tie figure data to pipeline naming.
-
-`assignFacesToMaterial` counts out-of-range indices and prints a warning instead of
-raising, so a figure with different topology produces a loud console line rather than
-aborting an otherwise fine conversion.
-
-### Reload order in `__init__.py` is load-bearing
-
-The `imp.reload(...)` block must reload **data modules before their consumers**.
-
-`importer_g3f_difeomorphic` and `difeomorphic_workflow` both pull the index modules in
-with `from ... import *`, which **copies** the arrays into their own globals at import
-time. Reloading a consumer first makes it re-copy data that is still stale, so an edit to
-an index file appears to do nothing and you have to restart Blender to see it.
-
-This was wrong for `difeomorphic_workflow_init_custom_vertex_indices`, which was listed
-*after* both of its consumers. Correct order now:
-
-```
-imp.reload(g3f.difeomorphic_workflow_init_custom_vertex_indices)
-imp.reload(g3f.difeomorphic_workflow_init_custom_face_indices)
-imp.reload(g3f.importer_g3f_difeomorphic)
-imp.reload(g3f.difeomorphic_workflow)
-```
-
-Note also that `if "bpy" in locals():` at the top is **always true** — `import bpy` is at
-line 24, well above it — so the reload branch always runs and the `else` branch never
-does. The real loading is done by the `from .X import *` lines above the guard, which also
-bind each submodule as an attribute of the package, which is what makes the `imp.reload`
-names resolve at all.
-
-### Geografts: discovery, ordering, renaming
-
-`G3F→VX body` now finds **every** geograft, clones it, parents it to the body clone and
-renames it `geograft_<N>_<short>`. It used to hardcode one name.
-
-**Discovery mirrors Diffeomorphic's own `getAnatomies()`:** a mesh is a geograft iff its
-data carries a non-empty `DazGraftGroup`, and it belongs to this body iff its
-`DazVertexCount` equals the body's vertex count. Authoritative, and it picks up genitalia,
-tails, wings, vampire teeth with no name list to maintain.
-
-**There is NO application order to recover.** Verified by enumerating every property
-`import_daz` registers — Mesh gets `DazRigidityGroups / DazGraftGroup / DazMaskGroup /
-DazVertexCount / DazMaterialSets / DazHDMaterials`, Object gets `DazId / DazUrl / DazMesh /
-DazRig / DazScale` and friends. All identity and geometry, none of them an index.
-Scene order is no substitute either: `bpy.data.objects` is name-sorted, and any delete or
-re-add reshuffles it.
-
-So the order is **ours to define, and what matters is determinism, not fidelity**:
-`exporter_unreal` builds the merged mesh name from the geograft order (`Belle_genz`), and
-that name is the prefix of the subdivision JSON files VersaMap reads in Unreal. If the
-order moves between runs, the exported filenames move with it.
-
-`sortGeografts` sorts by the profile's `order`, then by object name. Unlisted geografts
-take `GEOGRAFT_UNKNOWN_ORDER` and sort after every listed one, so **adding an unlisted
-geograft never renumbers the listed ones.** `N` is then assigned sequentially from the
-sorted result, so gaps in the `order` values are harmless.
-
-**Profiles** live in `g3f/difeomorphic_workflow_init_geografts.py`, keyed by the geograft's
-**original Daz object name**:
-
-| field | meaning |
-|---|---|
-| `order` | sort key; only relative values matter |
-| `short_name` | what follows the prefix — `genz` → `geograft_0_genz`; ends up in the exported merged name |
-| `material_role` | key into the per-mode material table (`'genital'`). **Omit** to leave the geograft's own materials alone — the right default for a tail or wings |
-
-A geograft with no entry still works: it is found, cloned, renamed with a sanitized
-version of its object name, sorts last, and keeps its materials. Entries exist only to pin
-the order and give a nicer short name.
-
-### Table lookups match by PREFIX
-
-`geograftTableKey()` resolves an object name against a table by **prefix, longest key
-wins**, and both `geograftProfile()` and `censorFacesForGeograft()` go through it.
-
-Prefix rather than exact because the mesh's object name is not something we control: it
-is the figure name plus whatever gets bolted on — `.001` because the geograft's own
-armature took the bare name first, sometimes a descriptive tail too. One table entry
-absorbs all of it. Verified against `Genesis 3 Female Genitalia`, `.001`, `.002`,
-`... Mesh` and `... HD.003` — all resolve to `genz` with 82 censor faces.
-
-Longest-key-wins means a more specific entry added later is not shadowed by a shorter
-one: with both `Genesis 3 Female Genitalia` and `Genesis 3 Female Genitalia 2` listed,
-the second stops resolving to the first.
-
-`short_name` in the profile is the maintained rename table the prefix match feeds.
-
-### Merging geografts ONE AT A TIME (`geograftFitsBody`)
-
-Diffeomorphic's rule is `aob.DazVertexCount == len(cob.data.vertices)` — the graft's
-authored target size against the body's **live** count. That rejects the second
-base-level geograft whenever you merge sequentially: the first merge grows the live
-count, and graft B was authored against the *original* figure.
-
-`geograftFitsBody` accepts either:
-
-1. `aob.DazVertexCount == live count` — Diffeomorphic's rule. Covers a pristine body and
-   also a **stacked** graft authored against a post-merge mesh.
-2. `aob.DazVertexCount == cob.data.DazVertexCount`, when `live > base` — the graft
-   targets the same base figure as the body, on a body that has already absorbed one.
-
-Rule 2 works because **`DazVertexCount` is written once at import and never updated by a
-merge** (`geometry.py` `setHideInfoMesh`), so on a merged body it still holds the original
-figure's count — exactly what a second base-level graft was authored against.
-
-And it is *safe* because the non-destructive merge only appends and welds, with the weld
-loop running high-to-low (`reversed(dazGraftGroupAfterJoinDict.items())`) so every removed
-vertex is one of the appended ones. **Base indices 0..N-1 are never renumbered** — which
-the existing loop already relies on, since it keeps looking up body indices between welds.
-
-The `live > base` guard keeps rule 2 from firing on a pristine body, so a genuine
-figure mismatch is still rejected. Verified: pristine→accept, post-merge base-level
-graft→accept (previously rejected), stacked graft→accept via rule 1, G8F graft→reject.
-
-### A geograft is TWO objects — the mesh always carries a `.NNN` suffix
-
-This is the normal case, not an edge case. A geograft imports as a **figure in its own
-right**, so it arrives as:
-
-| Object | Type | Name |
+| region | colour | red channel |
 |---|---|---|
-| the geograft's rig | ARMATURE | `Genesis 3 Female Genitalia` |
-| the geograft's mesh | MESH | `Genesis 3 Female Genitalia.001` |
+| whole body | white `(1,1,1)` | 1 |
+| censor region | cyan `(0,1,1)` | **0** |
 
-The armature claims the bare name first, so the **mesh** — the object the conversion
-actually clones and renames — is always left with the suffix. Which number lands on it
-depends on Blender's collision resolution, so it cannot be assumed to be `.001`.
+The Unreal graph reads `VertexColor → ComponentMask(R) → If(A > 0 ? 1 : 0)`, gated by a
+`Show Gens?` scalar parameter, into **Opacity Mask**. Red exactly 0 hides the face. So the
+body's crotch geometry underneath the genital geograft can be switched off at runtime —
+the same job Daz's own face-hiding mask does, but reversible in the material and with no
+extra material slot.
 
-Observed in the console when the tables were keyed on the raw name:
+#### Why per-LOOP, and why NO vertex index list
 
-```
-assignCensorFaces: no censor face table for geograft "Genesis 3 Female Genitalia.001"
-```
+Blender stores vertex colour per **loop** (face-corner), not per vertex. Painting from the
+**face** list is therefore exactly right, and a vertex list would make the mask *worse*:
 
-**Key the profile and censor tables on the bare FIGURE name**, never on what the outliner
-shows for the mesh object.
+- **per-loop** — every corner of a censor face is 0, so R interpolates to 0 across the
+  whole face and it is hidden. Every corner of a neighbouring face is 1. The boundary
+  lands exactly on the face edge.
+- **per-vertex** — a boundary face would have some corners 0 and some 1, R would ramp
+  across it, and the material's `> 0` test would keep most of it visible: a ragged,
+  half-masked edge.
 
-This is also why the old code worked: `checkIfActiveObjectHasChild` matched by
-**substring**, and `"Genesis 3 Female Genitalia"` is a substring of `"...Genitalia.001"`.
-Moving to exact-key tables is what broke it.
+The existing `censor_faces_by_geograft` table is reused unchanged.
 
-`normalizeObjectName()` strips the suffix (and handles it stacking, `.001.001`, from
-append-between-files). Every lookup goes through an accessor that normalizes —
-`geograftProfile()` and `censorFacesForGeograft()`. **No call site touches
-`geograft_profiles` or `censor_faces_by_geograft` directly**, which is what keeps the next
-lookup from reintroducing the bug.
+#### Wiring
 
-**It strips only `.NNN`, never `-N`.** `normalizeMaterialName` strips both and must NOT be
-reused for objects: a geograft legitimately named `Tail-2` would lose its `-2`. Two
-normalizers, two namespaces, on purpose.
+`paintCensorVertexColors(ob, geograft_names)` fills the layer white, then writes cyan into
+the loops of every censor face. `ensureVertexColorLayer` creates/reuses the layer named
+`Col`, sets it **active AND `active_render`** — 2.79's FBX exporter writes every layer it
+finds (there is no `use_mesh_colors` toggle to set, verified in `io_scene_fbx`), but Unreal
+keeps only one colour channel, so which layer is the render one decides what arrives.
+Colour stride is read off the data rather than assumed, so RGB (2.79) and RGBA both work.
 
-`sortGeografts` uses the normalized name as its tie-break so `X` and `X.001` sort
-adjacently, with the raw name last to keep the ordering total. Discovery filters on
-`ob.type == 'MESH'`, so the geograft's armature is never mistaken for the geograft.
+**Geograft clones get an explicit white layer.** Without it they reach the merge with no
+colour layer at all, and what the join fills in for the missing side is not something to
+leave to chance on a mask that decides whether geometry is visible.
 
-**Short names are still forced unique** by `assignGeograftNames`. It will not fire for the
-armature/mesh pair (only one mesh exists), but it remains the guard against a genuine
-duplicate: two grafts normalizing to the same profile would otherwise both become `genz`
-and export as `Belle_genz_genz`, with no way to tell which file was which.
+No FBX export change was needed. On the Unreal side the import must keep vertex colours
+(**Vertex Color Import Option = Replace**), or the mesh arrives white and nothing masks.
 
-**Original names are captured before renaming.** Both the profile table and
-`censor_faces_by_geograft` are keyed by the Daz name, which is gone from the clone the
-moment it is renamed, so `geograftClones` carries `(original_name, clone)` pairs.
+#### Reverting to the material approach
 
-**Censor faces are the UNION** across every present geograft that has a table entry — a
-body can carry several at once.
+Both pieces are intact: `assignCensorFaces` still works and `'censor'` is still in the
+per-mode name tables. Swap the `paintCensorVertexColors` call for
+`assignCensorFaces(ob, material_mode, geograftOriginalNames)` and put `'censor'` back in
+the `ensurePlaceholderMaterials` key list. LEGACY is untouched either way —
+`ensureLegacyGameMaterials` still creates `body_main_censor` from the frozen 21-name
+table, now with no faces, which is how LEGACY always was.
 
-**Re-run safety:** `geograftShortName` strips an existing `^geograft_\d+_` before
-rebuilding the name, so nothing ever becomes `geograft_0_geograft_0_genz`.
+#### The censor faces are DERIVED, not tabulated
 
-**This removes the old trap.** Previously the conversion looked for the literal name
-`"Genesis 3 Female Genitalia"` (substring match), so a geograft already hand-renamed to
-`geograft_0_genz` was invisible: no clone, no genital material, no censor faces, silently.
+`censorFacesForGeograft(geograft_object)` reads the geograft's own **`DazMaskGroup`** —
+Daz's list of base-mesh faces to hide when that graft is applied. That IS the censor
+region, and it ships with the geograft.
+
+**Verified 2026-09-03** on the G3F genitalia: `DazMaskGroup` returned exactly the 82
+indices that had been hand-collected, same count, same values, empty diff both ways. The
+hardcoded array is therefore **deleted** — recover it from git (commit `3b18dc7`) if a
+geograft ever needs one written out.
+
+Consequence: a tail, wings, vampire teeth or any future geograft masks its own footprint
+with **no table entry to write**.
+
+`censor_faces_by_geograft` survives, empty, as an **override** for a graft whose
+`DazMaskGroup` is not the region you want censored. An entry there wins over the derived
+mask. Keyed by bare figure name, prefix-matched, like every other geograft table.
+
+#### It takes the OBJECT, not a name
+
+The mask lives on the mesh data, so `geograftClones` now carries
+`(original_object, clone)` rather than `(original_name, clone)`. Pass the **original**
+geograft, never the clone: the clone is renamed, and the original is the one certain to
+carry Diffeomorphic's data.
+
+Verified against a mocked mesh: derivation reproduces the 82 indices; painting from them
+gives 82 cyan faces and zero mis-coloured loops; an unlisted graft masks its own faces
+with no entry; two geografts union correctly; an override beats the derived mask; and an
+empty `DazMaskGroup` leaves the body uniformly white.
 
 ### Where index data lives
 
@@ -583,14 +518,133 @@ is absent.
 modes have no fixed material table to pad and no engine index order to sort into —
 FULLBODY deliberately ends up with three or four slots.
 
-### Downstream, not yet checked
+### G3F UDIM tile map, and the tile FullBody loses
+
+Measured 2026-09-03 by running the conversion in **DAZ** mode (stock surface names kept)
+and counting loops per `floor(U)`:
+
+| tile | Daz surfaces | loops | FullBody material |
+|---|---|---|---|
+| 0 | Face, Ears, EyeSocket, Lips | 9,216 | `mat_fullbody` |
+| 1 | Torso | 12,360 | `mat_fullbody` |
+| 2 | Legs, Toenails | 16,200 | `mat_fullbody` |
+| 3 | Arms, Fingernails | 18,024 | `mat_fullbody` |
+| **4** | **Mouth, Teeth** | **8,232** | **`mat_fullbody`** |
+| 5 | Eyelashes | 1,008 | `mat_eyelashes` |
+| 6 | Cornea, Irises, Pupils, Sclera | 1,536 | `DONT_RENDER` |
+| 7 | EyeMoisture | 1,424 | `DONT_RENDER` |
+
+**The genital geograft arrives at U ∈ [0, 1)** — the same tile the body uses for the FACE.
+It is `relocateGeograftUvIsland` that moves it, to the tile its profile reserves via
+`uv_region_index` (9 for the G3F genitalia, i.e. U ∈ [8, 9)). The shift runs on the clone,
+before the join, and is measured from where the island actually is, so it is idempotent.
+
+Corrected 2026-09-06. This section previously claimed the graft shipped at U ∈ [-0.775,
+-0.225] — "its own negative tile, shipped that way by the Daz asset. Nothing in the
+pipeline creates or destroys that offset." That was wrong on both counts: the island
+arrives on the face tile, and nothing was relocating it. Where an earlier measurement of
+-0.775 came from is unknown; most likely a hand-edited file.
+
+**Unverified:** where the body's horizontal 0–7 tile layout comes from — G3F's own UDIM
+layout, or something Diffeomorphic does on import — has not been established. Do not
+assert either without checking a fresh import.
+
+**UV layer naming.** The body's layer is renamed to `UVMap` by the conversion; a
+Diffeomorphic graft arrives with Daz's own name (`Default UVs` on the G3F genitalia).
+`renameGeograftUvLayer` now matches them, so `join()` merges by name into one layer and
+`joinUvTextures` short-circuits on `len(uv_layers) <= 1`.
+
+Without that, the merge leans on a heuristic - a loop whose UV is at the origin counts as
+empty and is filled from the FIRST later layer that has data. Fine for a graft with one
+UV set; wrong for a graft carrying several (Daz assets do), where the first layer with
+data wins and need not be the `active_render` one. Coordinates are never touched, only
+the label.
+
+Note `active_render` lives on `uv_textures` (`MeshTexturePolyLayer`) in 2.79, NOT on
+`uv_layers` (`MeshUVLoopLayer`) - two RNA views of one CustomData layer, unified in 2.80.
+
+**BUG, FullBody only — mouth and teeth render invisible.** The Unreal opacity graph switches
+on `floor(U + 1)` with inputs 0..4 (`Gens`, `Face`, `Torso`, `Legs`, `Arms`) and a `Default`
+pin of **0.0**. Tile 4 maps to index 5, which no input covers, so it falls through to
+`Default` and is masked out.
+
+LEGACY never hit this: it collapses Mouth + Teeth into `body_teeth01`, a separate material,
+so they never reached this graph. **FullBody merges them into `mat_fullbody`, which is what
+exposed the gap.** Tiles 5-7 are safe only because their materials are separate too.
+
+**Fix is in the material, not here: set the Switch's `Default` pin to `1.0`.** The graph
+enumerates what to *show* and defaults to hiding, so any tile nobody listed vanishes
+silently. Inverted, only tile 0 needs special handling (`Round(Show Gens?)`) and everything
+else defaults visible — which also makes it immune to a new tile or a different figure.
+`Face`/`Torso`/`Legs`/`Arms` are all wired to the same `1.0` constant and become redundant.
+
+Also confirmed by this data: the Switch **floors** rather than rounds. Measured when the
+graft still sat on the negative tile, where it spanned [0.225, 0.775] after `+1`; rounding
+would have sent everything above 0.5 to index 1 and left over half the graft visible. It
+hid completely. The conclusion still holds — see `UMaterialExpressionSwitch::Compile` and
+`FHLSLMaterialTranslator::Switch`, which emit `step(i, floor(S)+0.5) * step(floor(S)+0.5,
+i+1)` per input — but the graft now lands on tile 8 (`uv_region_index` 9), so those
+particular numbers are historical.
+
+### Downstream, still not checked
 
 `helper_material_lists_lookup.build_materials_list_lookup` and `dictionary_materials.py`
 both hardcode the 19/21-entry legacy `stock_materials` table and read `body_subdiv_cage`.
-Those target the **legacy engine** export path, not Unreal. Running the exporter after a
-`DAZ` or `FULLBODY` conversion has **not been tested** and will almost certainly not
-produce a valid legacy material list. Not a bug in the new modes — just an untested
-combination worth knowing about.
+Those target the **legacy engine** export path, not Unreal. Running that exporter after a
+`DAZ` or `FULLBODY` conversion has **not** been tested and will almost certainly not
+produce a valid legacy material list.
+
+## Geografts go through the WEIGHT pipeline too (fixed 2026-09-03)
+
+`Manny FULL` used to resolve one mesh - `findConvertedBodyMesh` → `body_subdiv_cage` - and
+every step took that single object. Geografts were never passed to any of them.
+
+**Measured on a real conversion, after Manny FULL:**
+
+| | groups | names |
+|---|---|---|
+| `body_subdiv_cage` | 127 | `index_03.L`, `middle_03.L`, … (Manny) |
+| `geograft_0_genz` | 5 | `lThighTwist`, `rThighTwist`, `lThighBend`, `rThighBend`, `pelvis` (Daz) |
+
+and the graft's ARMATURE modifier still pointed at `Genesis 3 Female Genitalia` — its own
+Daz rig, which Manny FULL hides but does not delete.
+
+**Why that was going to bite:** `bpy.ops.object.join()` merges vertex groups **by name**,
+and the joined object keeps the *active* object's modifiers. The merged mesh would have
+carried Manny groups with body weights plus four orphaned Daz groups with graft weights and
+no bones. `pelvis` is spelled the same in both name spaces, so it survives by coincidence —
+making the symptom "gens rigidly follow the pelvis and ignore the legs" rather than an
+obvious explosion.
+
+**Fix:** Manny FULL now collects `findGeograftChildren(mesh_object)` and runs the same
+binding, rename and collapse over them. Two ordering constraints, both load-bearing:
+
+- **`bindGeograftToArmature`, never `bindMeshToArmature`.** The latter *clears the parent* —
+  right for `body_subdiv_cage`, which must stay top-level, but fatal here:
+  `exporter_unreal.get_geograft_children` finds grafts by walking
+  `body_subdiv_cage.children`, so an unparented graft is silently not exported.
+- **Geografts are collapsed FIRST, with `delete_bones=False`.** `mergeBonesIntoTargets`
+  skips any rule whose bones are no longer in the rig, so once the body pass has deleted
+  them a later graft pass would collapse nothing. Irrelevant for the genitalia graft (its
+  five groups touch no collapse rule) but not for a graft carrying collapsible weights —
+  vampire teeth on the jaw, say.
+
+- **Each graft gets only the rules whose SOURCES it has** (`collapseRulesForMesh`).
+  `mergeBonesIntoTargets` creates a missing TARGET group — `merge_vgroups_into_existing`
+  does it so `head` / `lowerJaw` / `foot.L` keep their own weights, which is right for the
+  body where every target is a real weighted group. It is wrong for a graft: the
+  unfiltered rule set turned `geograft_0_genz` from 5 groups into **9**, adding empty
+  `head`, `lowerJaw`, `foot.L`, `foot.R` to a mesh carrying only thigh, thigh_twist and
+  pelvis weights. Filtering costs the body nothing (it has every source, so it keeps every
+  rule) and a graft with genuinely collapsible weights — teeth on the jaw — still gets the
+  `head` / `lowerJaw` rules.
+
+**Still NOT applied to geografts:** `setupTwistBones`, the pectoral chain and the jiggle
+bones (`setupStomachBone`, `setupButtBones`). Those redistribute weights on the body only.
+The graft arrives with Daz's own thigh/twist split, so the body's reblend can leave a
+discontinuity across the graft seam. The welded boundary ring shares one set of weights, so
+the seam itself is fine; it is the interior graft vertices that keep the Daz distribution.
+Worth a visual check with a raised leg before deciding whether it needs addressing.
 
 ---
 
@@ -1150,3 +1204,66 @@ still being in the scene.
 
 6. Optional: `MESH_OT_clone_as_weighted_object` (`__init__.py:632`) is registered but in
    no panel — same as `gmtt.mesh_merge_weights`.
+
+---
+
+## SplitBody mode
+
+Added 2026-09-05. One material per body **region** instead of one for the whole body.
+Nine slots: `mat_face`, `mat_torso`, `mat_legs`, `mat_arms`, `mat_mouth`, `mat_gens`,
+`mat_censor`, `mat_eyelashes`, `DONT_RENDER`.
+
+### Why it exists
+
+Unreal cannot dynamically index separate texture objects, so a single body material has to
+multiplex its six UDIM tile textures with a `Switch` node keyed on `Floor(U+1)`.
+`MaterialExpressionSwitch` compiles to a **sum of products, not a branch**
+(`HLSLMaterialTranslator.cpp:8506`), so every input executes on every pixel. Measured on
+the albedo-only material: **8 pixel-shader texture lookups** where one is used. Adding
+normal + ORM + displacement takes that to ~26. Per-region materials make it ~3, and a new
+map type then costs one fetch instead of six.
+
+`mat_gens` and `mat_censor` earn their slots separately: with each on its own section,
+Unreal hides them by **swapping the slot's material** rather than by classifying UV tile
+or vertex colour in the shader. That deletes `Floor(U+1)`, `Is_Graft`,
+`GeograftRegionIndex`, the tile switch, the `IsCensor` vertex-colour test and the
+`OpacityMask` chain — and sidesteps a UE 5.8 bug where `OpacityMask` 0 is not discarded by
+`clip()` on skeletal mesh LOD0 (LOD1 and UE 5.7 both clip correctly).
+
+### Inclusion, not exclusion — the one real regression
+
+FullBody merges by **exclusion**: protect two names, sweep everything else into the body
+material. That is robust precisely because it needs no surface list.
+
+SplitBody cannot work that way — it has to know *which* region a surface belongs to, so it
+matches by name against `SPLIT_BODY_REGION_MATERIALS`. The groupings follow the UDIM tile
+map exactly, because that is what the Unreal side keys its per-region textures off.
+
+The guard is the leftover sweep at the end of `applySplitBodyMaterialConversion`: anything
+matching no region goes to `SPLIT_BODY_FALLBACK_ROLE` (`mat_torso`) **and is printed by
+name**. A custom or renamed surface is then loud rather than silently skinned as torso.
+Every target name is protected from that sweep, including `mat_gens` and `mat_censor`,
+which may already exist if a geograft was processed first.
+
+### Geograft does not fold
+
+`MODERN_MATERIAL_NAMES` notes that a join merges slots by material **datablock**, which is
+how FullBody gets the graft onto `mat_fullbody` for free. SplitBody relies on the inverse:
+`applyGeograftMaterial` gives the graft `mat_gens`, which is not any of the body's region
+materials, so the join has nothing to fold it into.
+
+### Censor is both
+
+`SPLITBODY` calls `assignCensorFaces` **and** `paintCensorVertexColors`. The material slot
+is what Unreal uses; the vertex colour costs nothing, the other modes depend on it, and it
+keeps the shader-side path available. `assignCensorFaces` runs after the unused-slot sweep
+for the same reason it always did — created earlier, `mat_censor` would be empty at sweep
+time and pruned before it could be filled.
+
+### Downstream
+
+**VersaMap must be regenerated after the first SplitBody export.** Splitting materials
+changes the section layout, which changes Unreal's render vertex ordering; the VersaMap
+Blender↔UE index mapping is built against the old layout and VersaMorph depends on it.
+Re-test VersaMorph before assuming it still works — this is the one part of the change
+that can silently break something that currently works.

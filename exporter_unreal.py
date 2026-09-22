@@ -14,6 +14,7 @@ import time
 from .utils import *
 from .tools_message_box import *
 from .diffeomorphic_merge_geografts import geograft_data_available, merge_geografts_into_active
+from .exporter_morph_bin import export_morph_bin, MORPH_BIN_SUFFIX, NUMPY_IMPORT_ERROR
 
 from . import fbody_stats
 #from . import strip_and_clean_op
@@ -27,6 +28,7 @@ from bpy_extras.io_utils import axis_conversion
 
 import bpy
 import json
+import array
 import struct
 import hashlib
 
@@ -61,6 +63,141 @@ def deselect_all_objects():
     #bpy.ops.object.select_all(action='DESELECT')
     for ob in bpy.context.selected_objects:
         ob.select = False
+
+def sort_faces_by_material(obj):
+    """Order a mesh's faces by material index, in place.
+
+    Unreal builds its skeletal mesh sections in the order it first meets each material while
+    walking the face list, so FACE order - not slot order - decides section order. The
+    subdivide that builds the hi-res LOD re-emits faces in a different order from the base
+    mesh, so the two LODs used to import with different section orders even though both
+    objects carry identical material slots. Sorting both meshes the same way makes section
+    index line up with material slot index on every LOD.
+
+    Only faces move; vertex indices, weights, shape keys and UVs are untouched.
+    """
+    if obj is None or obj.type != 'MESH':
+        return
+    deselect_all_objects()
+    obj.select = True
+    bpy.context.scene.objects.active = obj
+    bpy.ops.object.mode_set(mode="EDIT")
+    bpy.ops.mesh.reveal()
+    bpy.ops.mesh.select_mode(type='FACE')
+    bpy.ops.mesh.select_all(action='SELECT')
+    bpy.ops.mesh.sort_elements(type='MATERIAL', elements={'FACE'})
+    bpy.ops.mesh.select_all(action='DESELECT')
+    bpy.ops.object.mode_set(mode="OBJECT")
+    report_material_face_order(obj)
+
+
+def report_material_face_order(obj):
+    """Print the order Unreal will MEET the materials in, walking this mesh's face list.
+
+    Unreal builds its skeletal mesh sections in first-encounter order, so this sequence IS the
+    section order the FBX will produce. Printing it for both LODs is the only way to tell where
+    a mismatch is introduced.
+
+    Measured on SKM_BelaTest after a full round trip, LOD0 came out identity (sections 0..8 to
+    materials 0..8, no LODMaterialMap at all) while LOD1 came out
+    [0,1,8,7,6,5,4,3,2] - slots 0 and 1 in place and everything from 2 onward exactly REVERSED.
+    An exact reversal of exactly the tail is not random, so the question this answers is simply:
+    are the faces already in that order when they leave Blender, or does something downstream
+    reorder them? If the runs below are ascending on both LODs, the addon is not the culprit.
+    """
+    slots = [(slot.material.name if slot.material else "<empty>") for slot in obj.material_slots]
+    print("[FACEORDER] {} - {} material slots: {}".format(obj.name, len(slots), slots))
+
+    runs = []
+    for polygon in obj.data.polygons:
+        index = polygon.material_index
+        if not runs or runs[-1][0] != index:
+            runs.append([index, 0])
+        runs[-1][1] += 1
+
+    order = [run[0] for run in runs]
+    print("[FACEORDER] {} - face runs (material x face count): {}".format(
+        obj.name, ["{} x{}".format(run[0], run[1]) for run in runs]))
+    print("[FACEORDER] {} - first-encounter order: {}".format(obj.name, order))
+
+    # The whole point of sort_faces_by_material is that this comes out ascending with no
+    # material appearing twice. Say plainly which of those two it failed, rather than leaving
+    # the reader to compare two long lists by eye.
+    if len(order) != len(set(order)):
+        print("[FACEORDER] {} - PROBLEM: a material appears in more than one run, so the faces "
+              "are NOT grouped by material".format(obj.name))
+    elif order != sorted(order):
+        print("[FACEORDER] {} - PROBLEM: grouped but NOT ascending - Unreal will number these "
+              "sections differently from a LOD that is ascending".format(obj.name))
+    else:
+        print("[FACEORDER] {} - OK: grouped and ascending".format(obj.name))
+
+
+def strip_shape_keys_for_fbx(obj):
+    """Remove every shape key from obj, leaving mesh.vertices exactly as it was.
+
+    Used when the morphs are going into a .vxmb side-car instead: Blender's FBX exporter
+    writes blend shapes for any mesh with more than a Basis key and has no option to skip
+    them (export_fbx_bin.py, "We do not want basis-only relative skeys"), so the keys must be
+    gone from the mesh before the exporter looks at it.
+
+    Goes through gmtt.object_strip_and_clean, the addon's existing strip helper, rather than
+    rolling its own. That operator sets active_shape_key_index = 0 and calls
+    bpy.ops.object.shape_key_remove(all=True) - note the data-level loops commented out
+    beneath it in io_game_mod_tiny_tools, which someone tried and abandoned. Object
+    .shape_key_clear() is Blender 2.8+ and does not exist here at all.
+
+    The coordinate check is the part worth keeping. The keys are removed while the Basis is
+    active, so mesh.vertices should not move - but the slow shape key path above leaves
+    active_shape_key_index pointing at the LAST key, and sort_faces_by_material() enters edit
+    mode, which on a keyed mesh edits whichever key is active. If the vertices have drifted
+    from the basis the deltas were measured against, every delta in the .vxmb is relative to a
+    mesh that is not the one being exported - so this puts them back and says so loudly.
+
+    Returns True if the mesh ended up with no shape keys.
+    """
+    if obj is None or obj.type != 'MESH':
+        return False
+
+    mesh = obj.data
+    if mesh.shape_keys is None:
+        return True
+
+    before = [0.0] * (len(mesh.vertices) * 3)
+    mesh.vertices.foreach_get("co", before)
+    key_count = len(mesh.shape_keys.key_blocks)
+
+    deselect_all_objects()
+    obj.select = True
+    bpy.context.scene.objects.active = obj
+
+    if operator_exists("gmtt.object_strip_and_clean"):
+        bpy.ops.gmtt.object_strip_and_clean(sk=True)
+    else:
+        # The gmtt addon is a separate install, so it can legitimately be missing.
+        print("[VXMB] gmtt.object_strip_and_clean unavailable - falling back to the built-in")
+        obj.active_shape_key_index = 0
+        bpy.ops.object.shape_key_remove(all=True)
+
+    if mesh.shape_keys is not None:
+        print("[VXMB] WARNING: '{}' still has {} shape key(s) after stripping - the FBX will "
+              "carry blend shapes and the import will be slow"
+              .format(obj.name, len(mesh.shape_keys.key_blocks)))
+        return False
+
+    after = [0.0] * (len(mesh.vertices) * 3)
+    mesh.vertices.foreach_get("co", after)
+    drift = max([abs(a - b) for a, b in zip(before, after)]) if before else 0.0
+    if drift > 0.0:
+        print("[VXMB] WARNING: '{}' vertices moved by up to {:.6f} when its shape keys were "
+              "removed - restoring them, because the .vxmb deltas are measured against the "
+              "pre-strip basis".format(obj.name, drift))
+        mesh.vertices.foreach_set("co", before)
+        mesh.update()
+
+    print("[VXMB] Removed {} shape keys from '{}'".format(key_count, obj.name))
+    return True
+
 
 def operator_exists(idname):
     from bpy.ops import op_as_string
@@ -221,16 +358,80 @@ def copy_vertices_to_shape_key_between_different_topology_meshes_using_lookup_di
 
 
 SHAPEKEY_CACHE_MAGIC = b'VXSK'
-SHAPEKEY_CACHE_VERSION = 1
+# 2: the fingerprint covers the SOURCE SHAPE KEYS as well as the base mesh. Bumped rather
+# than left alone so every v1 cache is rejected as out of date instead of failing the new
+# fingerprint check and reporting "mesh geometry changed", which would not be true.
+SHAPEKEY_CACHE_VERSION = 2
 
 
-def compute_basis_fingerprint(mesh_obj):
-    """Compute MD5 fingerprint of a mesh object's vertex positions."""
-    n = len(mesh_obj.data.vertices)
-    cos = [0.0] * (n * 3)
-    mesh_obj.data.vertices.foreach_get("co", cos)
-    raw = struct.pack('<%df' % len(cos), *cos)
-    return hashlib.md5(raw).digest()
+def _floats_to_bytes(values):
+    """Flat float list -> raw float32 bytes.
+
+    array.array rather than struct.pack(*values): unpacking fifty thousand arguments into a
+    call is slow enough to notice once per shape key, and this runs a few hundred times now.
+    Native byte order, which on every platform this addon runs on is little-endian - and the
+    bytes only ever feed a hash that is compared against itself, never parsed.
+    """
+    return array.array('f', values).tobytes()
+
+
+def compute_basis_fingerprint(mesh_obj, shapekey_obj=None, sk_names=None):
+    """MD5 over everything the subdivided shape key cache is DERIVED from.
+
+    It used to hash the base mesh's vertex positions and nothing else, which made the cache
+    wrong in one specific and easy-to-hit way: edit a shape key without touching the base
+    mesh, and every check still passed. Vertex count, key count, key names and the
+    fingerprint were all unchanged, so the stale subdivided keys were served and the edit was
+    silently discarded. That used to cost you a wrong FBX; it now also rides into the .vxmb
+    side-car and on into Unreal, where it looks like a morph that simply does not match what
+    Blender shows.
+
+    So the hash covers both inputs: the base geometry AND the source shape keys.
+
+    Two objects, because they are two objects in practice - vxasset_stripped is created with
+    strip_and_clean(sk=True) and has no shape keys at all, while the keys themselves live on
+    vxasset. Passing only one object keeps the old single-mesh behaviour, and hashes that
+    object's own keys if it happens to have any.
+
+    sk_names pins which keys take part and in what order. Left out, every key after the Basis
+    is used, in key_blocks order.
+    """
+    digest = hashlib.md5()
+
+    count = len(mesh_obj.data.vertices)
+    positions = [0.0] * (count * 3)
+    mesh_obj.data.vertices.foreach_get("co", positions)
+    digest.update(_floats_to_bytes(positions))
+
+    source = shapekey_obj if shapekey_obj is not None else mesh_obj
+    key_blocks = source.data.shape_keys.key_blocks if source.data.shape_keys else None
+    if not key_blocks:
+        return digest.digest()
+
+    # Indexed from 1 rather than sliced: index 0 is the Basis, which is what the deltas are
+    # measured FROM rather than a morph, and the rest of this file walks key_blocks the same
+    # way (see the sk_names list built for the cache).
+    if sk_names is not None:
+        names = sk_names
+    else:
+        names = [key_blocks[i].name for i in range(1, len(key_blocks))]
+
+    # The count goes in first so that adding a key changes the hash even in the (impossible,
+    # but free to rule out) case where the new key's own bytes hash to nothing.
+    digest.update(struct.pack('<I', len(names)))
+    for name in names:
+        digest.update(name.encode('utf-8'))
+        if name not in key_blocks:
+            # Hashed as a distinct state rather than skipped: "this key is missing" and "this
+            # key exists and is empty" must not collide.
+            digest.update(b'--missing-key--')
+            continue
+        key_block = key_blocks[name]
+        key_positions = [0.0] * (len(key_block.data) * 3)
+        key_block.data.foreach_get("co", key_positions)
+        digest.update(_floats_to_bytes(key_positions))
+
+    return digest.digest()
 
 
 def save_shapekey_subdiv_cache(filepath, vxasset_hires, sk_names, fingerprint):
@@ -279,7 +480,7 @@ def load_shapekey_subdiv_cache(filepath, n_verts, sk_names, fingerprint):
                 return None
             cached_fp = f.read(16)
             if cached_fp != fingerprint:
-                print("Cache invalid: fingerprint mismatch (mesh geometry changed)")
+                print("Cache invalid: fingerprint mismatch (mesh geometry or shape key data changed)")
                 return None
             # Read per-key data
             result = {}
@@ -1384,9 +1585,55 @@ def reorient_bones_for_unreal(armature_clone, armature_object):
     #
     #we are done with making the bones friendly, lets go back to object mode to also transform the armature as a whole
     bpy.ops.object.mode_set(mode='OBJECT')
+def check_export_dependencies(params):
+    """Fail fast on anything the export needs but cannot provide itself.
+
+    Checked at export time rather than at addon registration, and that is deliberate: Blender
+    does not promise an order when it enables addons, so gmtt may simply not have registered
+    yet when this one loads. A load-time check would report a missing dependency that is about
+    to appear.
+
+    The point is WHEN it fails. Without this, a missing gmtt surfaces as an AttributeError on
+    bpy.ops.gmtt several hundred lines into the export, after the temporary meshes have been
+    built, the geografts baked and the shape keys subdivided - minutes of work, and a traceback
+    that names an operator rather than a missing addon.
+
+    Returns True when the export may proceed.
+    """
+    if not operator_exists("gmtt.object_strip_and_clean"):
+        ShowMessageBox(
+            "Missing addon: Game Mod Tiny Tools (io_game_mod_tiny_tools). "
+            "Enable it in User Preferences > Add-ons - the export needs its "
+            "Strip and Clean operator. See README.md.",
+            "Missing dependency", 'ERROR')
+        print("[VXMod] ABORTED: bpy.ops.gmtt.object_strip_and_clean is not available. "
+              "Enable the 'Game Mod Tiny Tools' addon.")
+        return False
+
+    # Same reasoning, one feature narrower: without this the numpy error is raised from inside
+    # export_morph_bin, which runs at the very END of the export.
+    if getattr(params, 'exportShapekeys', False) and getattr(params, 'exportMorphBin', False):
+        if NUMPY_IMPORT_ERROR is not None:
+            ShowMessageBox(
+                "The morph side-car needs numpy, which Blender's Python cannot import ({}). "
+                "See NumpyDependency.md, or untick 'Morphs to Side-Car, not FBX'."
+                .format(NUMPY_IMPORT_ERROR),
+                "Missing dependency", 'ERROR')
+            print("[VXMod] ABORTED: numpy unavailable for the morph side-car ({})"
+                  .format(NUMPY_IMPORT_ERROR))
+            return False
+
+    return True
+
+
 def export_to_unreal_v2(params) : #exportfolderpath,
     #exportfolderpath,exportFilename, includeGeograftsOnExportUnreal, cleanTempMeshesAfterExportUnreal, reorientBonesOnExportUnreal
     #
+    # Before anything is touched, and before the selection checks - a missing addon is not
+    # something the user can fix by picking a different object.
+    if not check_export_dependencies(params):
+        return None
+
     obj = bpy.context.active_object
     if not obj or obj.type != 'MESH':
         ShowMessageBox("No mesh object selected for export.", "Error", 'ERROR')
@@ -1614,7 +1861,7 @@ def export_to_unreal_v2(params) : #exportfolderpath,
                 cached = None
                 cache_path = None
                 if params.cacheShapekeys:
-                    fingerprint = compute_basis_fingerprint(vxasset_stripped)
+                    fingerprint = compute_basis_fingerprint(vxasset_stripped, vxasset, sk_names)
                     cache_path = os.path.join(exportfolderpath, mergedMeshesName + "_shapekeys_subdiv_cache.bin")
                     n_hires_verts = len(vxasset_hires.data.vertices)
                     cached = load_shapekey_subdiv_cache(cache_path, n_hires_verts, sk_names, fingerprint)
@@ -1769,6 +2016,9 @@ def export_to_unreal_v2(params) : #exportfolderpath,
         armature_modifier = vxasset_hires.modifiers[-1]
         # Set the armature object for the modifier
         armature_modifier.object = armature_clone
+        # Both LODs must present their faces in the same order or Unreal builds their
+        # sections in different orders - see sort_faces_by_material().
+        sort_faces_by_material(vxasset_hires)
         LODs.append(vxasset_hires)
     
     #add the armature modifier
@@ -1787,6 +2037,8 @@ def export_to_unreal_v2(params) : #exportfolderpath,
     armature_modifier = vxasset.modifiers[-1]
     # Set the armature object for the modifier
     armature_modifier.object = armature_clone
+    # Same face ordering as the hi-res LOD - see sort_faces_by_material().
+    sort_faces_by_material(vxasset)
     LODs.append(vxasset)
 
     #the order in which we set the parent is important it seems, otherwise in Unreal it will appear in the wrong order
@@ -1824,6 +2076,58 @@ def export_to_unreal_v2(params) : #exportfolderpath,
     # on Unreal names either way, but the log reads as the FBX will) and after
     # every bone has been created, since it rebuilds the whole edit bone list.
     sort_bones_for_export(armature_clone)
+
+    # The morph side-car, written from the SAME meshes the FBX is about to carry
+    # and at the same moment - after every transform_apply, after the bone
+    # renames, with nothing left to change the vertex data. Writing it earlier
+    # would risk describing a mesh that no longer exists by the time it ships.
+    #
+    # Deliberately independent of the shape key block far above: sk_names and
+    # the fingerprint there live inside the subdiv branch and may not exist at
+    # all, and a side-car that silently skipped itself because of an unrelated
+    # code path is worse than one that is simply not requested.
+    if params.exportShapekeys and getattr(params, 'exportMorphBin', False):
+        base_lod = LODs[-1]
+        if base_lod.data.shape_keys is None:
+            print("[VXMB] Base LOD has no shape keys - no side-car written")
+        else:
+            # key_blocks[0] is the Basis, which is the thing deltas are measured
+            # FROM rather than a morph in its own right.
+            key_blocks = base_lod.data.shape_keys.key_blocks
+            morph_names = [key_blocks[i].name for i in range(1, len(key_blocks))]
+            written = export_morph_bin(
+                os.path.join(exportfolderpath, "SKM_" + obj.name + MORPH_BIN_SUFFIX),
+                LODs,
+                morph_names,
+                compute_basis_fingerprint(base_lod),
+                include_normals=getattr(params, 'exportMorphBinNormals', True))
+
+            # INSTEAD OF the FBX, not as well as. Leaving the keys on would defeat the whole
+            # exercise: the side-car exists because Unreal's FBX importer spends most of its
+            # time pre-reading and parsing blend shape channels, and it will do exactly that
+            # whether or not a .vxmb is sitting next to the file.
+            #
+            # Blender's FBX exporter has no switch for this - export_fbx_bin.py writes blend
+            # shapes for any mesh with more than a Basis key, and the only thing that suppresses
+            # them (use_mesh_modifiers) would change the geometry. So the keys have to be gone
+            # from the mesh by the time the exporter looks.
+            #
+            # Safe because these are throwaway duplicates: vxasset and vxasset_hires are built
+            # during this export and deleted after it. The user's own meshes are never touched.
+            # shape_key_clear() leaves mesh.vertices untouched, which is the same basis the
+            # deltas were just measured against, so the two stay consistent.
+            #
+            # Only once the side-car is actually ON DISK. Stripping first and failing second
+            # would ship an FBX with no morphs and no side-car either - the shapes would be
+            # gone from both halves of the pipeline.
+            if written:
+                for lod in LODs:
+                    strip_shape_keys_for_fbx(lod)
+                print("[VXMB] The FBX will carry geometry only - VersaMap injects the morphs "
+                      "on import")
+            else:
+                print("[VXMB] Side-car was NOT written - leaving the shape keys in the FBX "
+                      "so the morphs still reach Unreal the slow way")
 
     #fbx export:
     emptyLodGroup.select=True
