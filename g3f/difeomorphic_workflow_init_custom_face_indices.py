@@ -10,9 +10,9 @@ import bpy
 # polygon indices and mixing the two index spaces in one namespace is exactly the kind
 # of thing that reads fine and then silently indexes the wrong array.
 #
-# These are valid against the STOCK Diffeomorphic G3F body topology, as it stands during
-# "G3F -> VX body". Nothing in that conversion deletes geometry - the material work only
-# remaps polygon material_index and prunes slots - so the clone keeps the source
+# Face indices are valid against the STOCK Diffeomorphic G3F body topology, as it stands
+# during "G3F -> VX body". Nothing in that conversion deletes geometry - the material work
+# only remaps polygon material_index and prunes slots - so the clone keeps the source
 # polygon order and these indices stay meaningful all the way through.
 #
 # They are NOT valid after the geograft merge (diffeomorphic_merge_geografts.py), which
@@ -20,41 +20,27 @@ import bpy
 
 
 # ---------------------------------------------------------------------------
-# Censor faces - PER GEOGRAFT
+# Censor faces - DERIVED, not tabulated
 #
-# These live on the BODY mesh, but which faces belong to the censor region is decided by
-# the geograft that gets merged in later: the region has to cover the graft's footprint
-# and the body around it, so a different geograft implies a different set. An array here
-# is therefore only meaningful paired with one specific geograft.
+# The censor region is read from each geograft's own DazMaskGroup: Daz's list of
+# base-mesh faces to hide when that graft is applied. That IS the region to censor, and
+# it ships with the geograft, so nothing has to be collected by hand.
 #
-# Keyed by the geograft's OBJECT NAME, which is what the conversion has in hand -
-# importer_g3f_difeomorphic looks the geograft up by exact object name.
+# Verified 2026-09-03 against the G3F genitalia: DazMaskGroup returned exactly the 82
+# indices that had been hand-collected for it - same count, same values, empty diff both
+# ways. The hardcoded array is therefore gone; recover it from git (commit 3b18dc7) if a
+# geograft ever needs one written out.
 #
-# Adding a geograft means TWO edits, and they are in different files:
-#   1. a new array + registry entry here
-#   2. the lookup in convertG3FDifeomorphicToVXModFBody, which currently hardcodes
-#      "Genesis 3 Female Genitalia" as the only geograft it searches for
-# Doing only (1) leaves the new array unreachable.
+# Consequence: a tail, wings, vampire teeth or any future geograft masks its own footprint
+# with no entry to write here.
 #
-# No entry for a geograft means NO censor faces are assigned. The material slot is still
-# created - empty - so the Unreal side keeps its guarantee that the slot exists.
+# This dict survives only as an OVERRIDE, for a geograft whose DazMaskGroup is not the
+# region you actually want censored - too small, too large, or a graft you want masked
+# differently from how Daz hides it. Keyed like every other geograft table: by the bare
+# FIGURE name, matched by prefix, so the ".NNN" the mesh object carries does not matter.
+#
+# An entry here WINS over DazMaskGroup. Add one only to deviate deliberately.
 # ---------------------------------------------------------------------------
 
-# The stock Daz G3F genitalia geograft.
-censor_faces_genesis_3_female_genitalia = [
-    8658, 8659, 8660, 8661, 8704, 9169, 9246, 9254, 9376, 9377,
-    9380, 9381, 9767, 9768, 9769, 9770, 9803, 9804, 9805, 9806,
-    9807, 9808, 9809, 9810, 9811, 9812, 9813, 9814, 9816, 9821,
-    9824, 9940, 9941, 9942, 9943, 9944, 9945, 9946, 9947, 9948,
-    9949, 10067, 10068, 10069, 10070, 10113, 10578, 10655, 10663, 10785,
-    10786, 10789, 10790, 11176, 11177, 11178, 11179, 11212, 11213, 11214,
-    11215, 11216, 11217, 11218, 11219, 11220, 11221, 11222, 11223, 11225,
-    11230, 11233, 11349, 11350, 11351, 11352, 11353, 11354, 11355, 11356,
-    11357, 11358,
-]
-
-
-# Geograft object name -> censor face indices on the body mesh.
 censor_faces_by_geograft = {
-    "Genesis 3 Female Genitalia": censor_faces_genesis_3_female_genitalia,
 }

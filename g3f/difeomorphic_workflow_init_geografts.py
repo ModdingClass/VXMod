@@ -21,12 +21,16 @@ import bpy
 #   short_name    what follows the prefix, e.g. "genz" -> geograft_0_genz. This is the
 #                 fragment that ends up in the exported merged mesh name (Belle_genz),
 #                 so it should be short and stable.
-#   material_role key into the per-mode material name table in
-#                 importer_g3f_difeomorphic (LEGACY_MATERIAL_NAMES /
-#                 MODERN_MATERIAL_NAMES). The geograft's own material slots are dropped
-#                 and replaced with that one. OMIT the key to leave the geograft's
-#                 materials untouched - which is the right default for anything that is
-#                 not genitalia: a tail or wings have their own textures worth keeping.
+#   material_role names the geograft CATEGORY, not a material. It is resolved through
+#                 the per-mode table in importer_g3f_difeomorphic (LEGACY_MATERIAL_NAMES /
+#                 MODERN_MATERIAL_NAMES), so the same role gives a different material per
+#                 scheme: "genital" -> body_genital01 in LEGACY, mat_fullbody in the
+#                 modern one, where the graft shares the BODY material because the Unreal
+#                 shader separates them by UV tile rather than by material slot.
+#                 The geograft's own slots are dropped and replaced with that material.
+#                 OMIT the key to leave them untouched - the right default for anything
+#                 that is not genitalia: a tail or wings ship with their own textures.
+#                 DAZ mode ignores this field entirely and keeps stock Daz surfaces.
 #
 # A geograft with NO entry here is still found, cloned, parented and renamed. It just
 # gets a sanitized version of its object name as short_name, sorts after every known
@@ -62,5 +66,20 @@ geograft_profiles = {
         "order": 0,
         "short_name": "genz",
         "material_role": "genital",
+
+        # The UV tile this graft is MOVED to before the join, in the material's
+        # Floor(U+1) numbering - so 9 means the island ends up at U in [8, 9).
+        #
+        # This graft's island ARRIVES at U in [0, 1), which is the FACE tile on the
+        # body. Merging without relocating overlaps the two. That costs nothing for
+        # shading - the graft has its own material and its own texture, and wrap sampling
+        # does not care which tile it reads from - but it breaks anything that rasterises
+        # the mesh in UV SPACE: the paint and mask render targets, per-tile captures,
+        # any bake.
+        #
+        # Hardcoded per geograft rather than allocated at runtime, so a given graft lands
+        # on the same tile in every export and the Unreal side can rely on it. Give each
+        # new geograft its own index; do not reuse one.
+        "uv_region_index": 9,
     },
 }

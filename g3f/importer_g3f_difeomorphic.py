@@ -1,4 +1,5 @@
 import bpy
+import math
 import re
 
 from ..g3f.difeomorphic_workflow_convert_body import *
@@ -243,15 +244,18 @@ def selectByMaterials(ob, selection_list):
 # ---------------------------------------------------------------------------
 # Material conversion modes
 #
-# Three ways to turn the Daz surface list into game materials, picked in the panel
+# Four ways to turn the Daz surface list into game materials, picked in the panel
 # under the "G3F -> VX body" button and passed in as `material_mode`:
 #
-#   DAZ       leave the stock Daz surfaces exactly as imported
-#   LEGACY    the original vxmod collapse into the 21 body_* game materials
-#   FULLBODY  one material for the whole body, minus two exceptions
+#   DAZ        leave the stock Daz surfaces exactly as imported
+#   LEGACY     the original vxmod collapse into the 21 body_* game materials
+#   FULLBODY   one material for the whole body, minus two exceptions
+#   SPLITBODY  one material per body REGION, plus own slots for graft and censor
 #
-# Whatever the mode, the mesh always ends up with the placeholder materials and with the
-# censor region on its own slot - see ensurePlaceholderMaterials and assignCensorFaces.
+# Every mode marks the censor region in VERTEX COLOUR - see paintCensorVertexColors.
+# SPLITBODY additionally gives it a material slot of its own, because a slot swap in
+# Unreal is cheaper and simpler than a vertex-colour classifier in the shader. There is
+# no placeholder material pass: nothing needs an empty slot reserved for it any more.
 # ---------------------------------------------------------------------------
 
 # Daz surfaces that make up the eye interior. LEGACY folds these into body_head01 and
@@ -263,6 +267,36 @@ EYE_INTERIOR_MATERIALS = ["Cornea", "Pupils", "Sclera", "Irises", "EyeMoisture"]
 # Kept out of every merge: this one needs a translucent material in Unreal, so it
 # cannot share a slot with opaque skin.
 EYELASH_MATERIALS = ["Eyelashes"]
+
+# SPLITBODY only. One Daz surface list per body region, keyed by the role name the
+# SPLIT_MATERIAL_NAMES table uses.
+#
+# The groupings follow the G3F UDIM tile map exactly - see "G3F UDIM tile map" in
+# CLAUDE.md - because that is what the Unreal side keys its per-region textures off:
+#   tile 0 face   tile 1 torso   tile 2 legs   tile 3 arms   tile 4 mouth
+#
+# Matched against bare Daz names through _slotIndicesMatchingPrefixes, so Diffeomorphic's
+# "-N" suffixes normalize away ("Torso-1" matches "Torso").
+#
+# NOTE this is INCLUSION matching, unlike FullBody's exclusion sweep. SplitBody has to
+# know WHICH region a surface belongs to, so it cannot merge by "everything unprotected".
+# applySplitBodyMaterialConversion compensates by routing unmatched surfaces to a named
+# fallback and printing them, so a custom surface is loud rather than silently skinned.
+SPLIT_BODY_REGION_MATERIALS = [
+    ('face',  ["EyeSocket", "Ears", "Lips", "Face"]),
+    ('torso', ["Torso"]),
+    ('legs',  ["Legs", "Toenails"]),
+    ('arms',  ["Arms", "Fingernails"]),
+    ('mouth', ["Mouth", "Teeth"]),
+    # A genital surface sitting on the BODY (rather than arriving as a geograft) belongs
+    # with the graft. applyGeograftMaterial handles the geograft object itself.
+    ('genital', ["Genitalia"]),
+]
+
+# Where a surface goes when it matches no region list. Torso is the largest skin region
+# and the least wrong place for an unknown patch of skin - but every fallback is printed,
+# so it is a warning, not a silent default.
+SPLIT_BODY_FALLBACK_ROLE = 'torso'
 
 # --- Material names, per mode -----------------------------------------------
 #
@@ -294,34 +328,72 @@ MODERN_MATERIAL_NAMES = {
     'fullbody': "mat_fullbody",
     'dont_render': "DONT_RENDER",
     'eyelashes': "mat_eyelashes",
+
+    # A role names the GEOGRAFT CATEGORY, not a material, so the same role can resolve to
+    # different materials per scheme. In the modern scheme a genital geograft goes on the
+    # BODY material - there is no mat_genital.
+    #
+    # That is what the Unreal graph expects: body and geograft live in one merged mesh
+    # under ONE material, and the shader tells them apart by UV TILE (the graft's island
+    # sits at U in [-1,0), the body at [0,1)) rather than by material slot. Two slots
+    # would be a second section and a second draw call buying nothing.
+    #
+    # After the merge Blender folds both objects onto the same slot automatically, since
+    # a join merges slots by material datablock and they now share one.
+    'genital': "mat_fullbody",
+
+    # Unused by default - the censor region is vertex colour now, not a material. Kept so
+    # the assignCensorFaces revert path still resolves a name. SPLITBODY is the one mode
+    # that DOES put the censor on its own slot; see SPLIT_MATERIAL_NAMES.
     'censor': "mat_censor",
-    'genital': "mat_genital",
+}
+
+
+# THREE schemes, not two. SPLITBODY needs its own table because two roles resolve
+# differently from the modern scheme:
+#
+#   genital -> mat_gens, not mat_fullbody. The whole point of the mode is that the graft
+#             is its own SECTION, so Unreal can hide it by swapping that slot to
+#             DONT_RENDER instead of working out body-vs-graft from the UV tile in the
+#             shader. That deletes Floor(U+1), Is_Graft, GeograftRegionIndex, the tile
+#             switch and the OpacityMask dependency - and sidesteps a UE 5.8 bug where
+#             OpacityMask 0 is not clipped on skeletal LOD0.
+#
+#   censor  -> mat_censor, and actually used. Same reasoning: a slot swap instead of a
+#             vertex-colour classifier in the shader.
+#
+# fullbody is None: there is no single body material in this scheme, the same way LEGACY
+# has none. Anything asking for it is asking the wrong question in this mode.
+SPLIT_MATERIAL_NAMES = {
+    'fullbody': None,
+    'dont_render': "DONT_RENDER",
+    'eyelashes': "mat_eyelashes",
+    'genital': "mat_gens",
+    'censor': "mat_censor",
+
+    # Region materials - SPLITBODY only. The other schemes have no equivalent.
+    'face': "mat_face",
+    'torso': "mat_torso",
+    'legs': "mat_legs",
+    'arms': "mat_arms",
+    'mouth': "mat_mouth",
 }
 
 
 def materialNamesForMode(material_mode):
-    """The name table for a mode. LEGACY has its own; DAZ and FULLBODY share modern."""
+    """The name table for a mode.
+
+    THREE schemes: LEGACY has its own, SPLITBODY has its own, and DAZ + FULLBODY share
+    the modern one. Anything unrecognised gets modern, which is safe because
+    convertG3FDifeomorphicToVXModFBody normalizes an unknown mode to LEGACY before any
+    of this runs - see the comment at that guard for why the normalization has to happen
+    there rather than here.
+    """
     if material_mode == 'LEGACY':
         return LEGACY_MATERIAL_NAMES
+    if material_mode == 'SPLITBODY':
+        return SPLIT_MATERIAL_NAMES
     return MODERN_MATERIAL_NAMES
-
-
-def ensurePlaceholderMaterials(ob, material_mode):
-    """Guarantee the runtime-swap placeholder slots exist. Assigns no faces itself.
-
-    Mode-aware, because the two schemes must not both appear on one mesh - creating the
-    modern names unconditionally would leave LEGACY carrying mat_censor AND
-    body_main_censor, two slots for one region.
-
-    The censor material is given faces immediately afterwards by assignCensorFaces. The
-    genital material stays empty on the body mesh in DAZ and FULLBODY; in LEGACY it
-    already carries faces from that mode's Genitalia remap.
-    """
-    names = materialNamesForMode(material_mode)
-    for key in ('censor', 'genital'):
-        material_name = names[key]
-        if material_name:
-            checkIfMaterialExistElseCreateIt(ob, material_name)
 
 
 def assignFacesToMaterial(ob, face_indices, material_name):
@@ -374,7 +446,7 @@ def assignFacesToMaterial(ob, face_indices, material_name):
     return assigned
 
 
-def assignCensorFaces(ob, material_mode, geograft_names):
+def assignCensorFaces(ob, material_mode, geograft_objects):
     """Put the censor region on its own slot, in every material mode.
 
     The faces come off whatever material otherwise owned them - body_main_upper in
@@ -388,14 +460,13 @@ def assignCensorFaces(ob, material_mode, geograft_names):
     difeomorphic_workflow_init_custom_face_indices.censor_faces_by_geograft.
 
     With no geograft, or one with no entry in that table, nothing is assigned. The
-    material slot still exists (ensurePlaceholderMaterials made it), just empty, so the
-    Unreal side keeps its guarantee that the slot is there. Borrowing a face set from a
-    different geograft would put the censor in the wrong place, which is worse than an
-    empty slot.
+    material slot is created by assignFacesToMaterial itself when there is something to
+    put in it. Borrowing a face set from a different geograft would put the censor in the
+    wrong place, which is worse than no censor at all.
     """
     material_name = materialNamesForMode(material_mode)['censor']
 
-    if not geograft_names:
+    if not geograft_objects:
         print("assignCensorFaces: no geograft on this body - {0} left empty".format(
             material_name))
         return 0
@@ -404,18 +475,17 @@ def assignCensorFaces(ob, material_mode, geograft_names):
     # each contributes. Sorted so the assignment is order-independent.
     face_indices = set()
     contributors = []
-    for geograft_name in geograft_names:
-        faces = censorFacesForGeograft(geograft_name)
-        if faces is None:
-            print("assignCensorFaces: no censor face table for geograft \"{0}\" - it "
-                  "contributes nothing. Add one to censor_faces_by_geograft.".format(
-                      geograft_name))
+    for geograft_object in geograft_objects:
+        faces = censorFacesForGeograft(geograft_object)
+        if not faces:
+            print("assignCensorFaces: geograft \"{0}\" has an empty DazMaskGroup and no "
+                  "override - it contributes nothing".format(geograft_object.name))
             continue
         face_indices.update(faces)
-        contributors.append(geograft_name)
+        contributors.append(geograft_object.name)
 
     if not face_indices:
-        print("assignCensorFaces: no geograft on this body has a censor face table - "
+        print("assignCensorFaces: no geograft on this body yields censor faces - "
               "{0} left empty".format(material_name))
         return 0
 
@@ -493,10 +563,35 @@ def geograftProfile(object_name):
     return geograft_profiles[key] if key else None
 
 
-def censorFacesForGeograft(object_name):
-    """Censor face indices for a geograft, matched by name prefix."""
-    key = geograftTableKey(censor_faces_by_geograft, object_name)
-    return censor_faces_by_geograft[key] if key else None
+def censorFacesForGeograft(geograft_object):
+    """The base-mesh faces this geograft hides - the region to censor.
+
+    Read from the geograft's OWN DazMaskGroup: Daz's list of base-mesh faces to hide when
+    the graft is applied. That IS the censor region, and it ships with the geograft, so
+    nothing has to be collected by hand.
+
+    Verified 2026-09-03 on the G3F genitalia - DazMaskGroup returned exactly the 82
+    indices that had been hand-collected for it, empty diff both ways. So any geograft now
+    masks its own footprint with no table entry: a tail, wings, whatever comes next.
+
+    censor_faces_by_geograft survives as an OVERRIDE and WINS when it has a matching
+    entry, for a graft whose mask is not the region you actually want censored. Empty by
+    default.
+
+    Takes the OBJECT, not a name - the mask lives on the mesh data. Pass the ORIGINAL
+    geograft, not the clone: the clone is renamed, and the original is the one certain to
+    carry Diffeomorphic's data.
+    """
+    override_key = geograftTableKey(censor_faces_by_geograft, geograft_object.name)
+    if override_key:
+        print("censorFacesForGeograft: using the override entry for \"{0}\"".format(
+            override_key))
+        return censor_faces_by_geograft[override_key]
+
+    mask_group = getattr(geograft_object.data, "DazMaskGroup", None)
+    if not mask_group:
+        return None
+    return sorted(item.a for item in mask_group)
 
 
 def isGeograft(ob, body_vertex_count):
@@ -558,7 +653,7 @@ def findGeografts(root_object, body_mesh_object):
 def assignGeograftNames(geograft_clones):
     """Rename every clone, numbering sequentially and keeping short names UNIQUE.
 
-    `geograft_clones` is a list of (original_name, clone) already in sorted order.
+    `geograft_clones` is a list of (original_object, clone) already in sorted order.
 
     Uniqueness matters because the short names are joined into the exported merged mesh
     name. A scene holding both "Genesis 3 Female Genitalia" and a leftover
@@ -568,8 +663,8 @@ def assignGeograftNames(geograft_clones):
     """
     used = {}
     names = []
-    for index, (original_name, clone) in enumerate(geograft_clones):
-        short_name = geograftShortName(original_name)
+    for index, (original_object, clone) in enumerate(geograft_clones):
+        short_name = geograftShortName(original_object.name)
         seen = used.get(short_name, 0)
         used[short_name] = seen + 1
         if seen:
@@ -578,6 +673,199 @@ def assignGeograftNames(geograft_clones):
             short_name = "{0}_{1}".format(short_name, seen + 1)
         names.append(renameGeograft(clone, short_name, index))
     return names
+
+
+_GEOGRAFT_INDEX_RE = re.compile(r"^geograft_(\d+)_")
+
+
+def findGeograftChildren(body_mesh_object):
+    """The geograft clones parented to the converted body, in geograft_<N>_ order.
+
+    Identified by the same `^geograft_(\\d+)_` prefix exporter_unreal.get_geograft_children
+    uses, so the conversion, Manny FULL and the exporter all agree on what a geograft is.
+
+    Used by Manny FULL, which otherwise only ever touches body_subdiv_cage - see
+    bindGeograftToArmature for why that mattered.
+    """
+    matched = []
+    for child in body_mesh_object.children:
+        if child.type != 'MESH':
+            continue
+        match = _GEOGRAFT_INDEX_RE.match(child.name)
+        if match:
+            matched.append((int(match.group(1)), child))
+    matched.sort(key=lambda pair: pair[0])
+    return [child for _index, child in matched]
+
+
+BODY_UV_LAYER = "UVMap"
+
+
+def relocateGeograftUvIsland(ob, original_name):
+    """Shift a geograft's UV island onto the tile its profile reserves for it.
+
+    Daz ships the G3F genitalia island at U in [0, 1) - the same tile the body uses for
+    the FACE. Joining without relocating overlaps them.
+
+    That overlap is harmless for SHADING: the graft has its own material and its own
+    texture, and wrap sampling reads the same texels whichever tile the coordinate names.
+    It is NOT harmless for anything that rasterises the mesh in UV SPACE - the paint and
+    mask render targets, per-tile captures, bakes - where two islands on one tile write
+    over each other.
+
+    The destination comes from the profile's `uv_region_index`, in the material's
+    Floor(U+1) numbering, so index 9 means the island lands at U in [8, 9). Hardcoded per
+    geograft so a given graft is on the same tile in every export.
+
+    The shift is measured from where the island ACTUALLY is (floor of the smallest U),
+    not assumed to start at 0 - an asset that already ships elsewhere still lands on the
+    reserved tile instead of being pushed past it.
+
+    Every UV layer is shifted, not just the active one. Daz assets often carry several,
+    the join picks by name, and leaving the others behind would mean the choice of layer
+    silently decides where the graft ends up.
+
+    V is untouched. Only the tile column moves.
+    """
+    profile = geograftProfile(original_name)
+    if not profile or profile.get("uv_region_index") is None:
+        print("relocateGeograftUvIsland: {0} has no reserved tile - UVs left alone"
+              .format(ob.name))
+        return None
+
+    target_tile = int(profile["uv_region_index"]) - 1   # Floor(U+1) -> floor(U)
+
+    uv_layers = list(ob.data.uv_layers)
+    if not uv_layers:
+        print("relocateGeograftUvIsland: {0} has no uv layer".format(ob.name))
+        return None
+
+    moved = 0
+    for uv_layer in uv_layers:
+        loop_count = len(uv_layer.data)
+        if not loop_count:
+            continue
+        flat = [0.0] * (loop_count * 2)
+        uv_layer.data.foreach_get("uv", flat)
+
+        u_values = flat[0::2]
+        u_min = min(u_values)
+        u_max = max(u_values)
+        current_tile = int(math.floor(u_min))
+
+        # An island is only relocatable if it FITS inside the tile it starts in. If it
+        # crosses a boundary, no integer shift can land it on a single tile, and shifting
+        # anyway would leave part of it on the neighbour - the same overlap this function
+        # exists to prevent, just somewhere less obvious. Say so and leave it alone.
+        #
+        # Tested against the tile's far EDGE, not against a width: an island can be a
+        # full tile wide and still fit (U 0..1), while one only 1.0 wide can straddle
+        # (U -0.001..0.999). The epsilon lets a coordinate sit exactly on the boundary,
+        # which is a legitimate UV meaning "the edge of this tile".
+        if u_max > current_tile + 1.0 + 1e-6:
+            print("relocateGeograftUvIsland: {0} layer \"{1}\" spans U {2:.4f}..{3:.4f}, "
+                  "crossing the tile {4} boundary - NOT relocated".format(
+                      ob.name, uv_layer.name, u_min, u_max, current_tile))
+            continue
+
+        offset = target_tile - current_tile
+        if offset == 0:
+            print("relocateGeograftUvIsland: {0} layer \"{1}\" already on tile {2}"
+                  .format(ob.name, uv_layer.name, target_tile))
+            continue
+
+        flat[0::2] = [u + offset for u in u_values]
+        uv_layer.data.foreach_set("uv", flat)
+        moved += 1
+        print("relocateGeograftUvIsland: {0} layer \"{1}\" tile {2} -> {3} "
+              "(U {4:+d}, region index {5})".format(
+                  ob.name, uv_layer.name, current_tile, target_tile, offset,
+                  profile["uv_region_index"]))
+
+    return target_tile
+
+
+def renameGeograftUvLayer(ob, target_name=BODY_UV_LAYER):
+    """Rename the geograft's RENDER uv layer to match the body's, so the join merges them.
+
+    The body's layer is renamed to UVMap by the conversion; a Diffeomorphic geograft
+    arrives with whatever Daz called its uv set ("Default UVs" on the G3F genitalia).
+    Different names mean bpy.ops.object.join() produces TWO layers, and the merge then
+    relies on joinUvTextures to consolidate them by a heuristic: a loop whose uv is at
+    the origin is treated as empty and filled from the first LATER layer that has data.
+
+    That heuristic is fine for a graft with one uv set - there is nothing to pick wrongly.
+    It is not fine for a graft carrying several, which Daz assets do: the first layer with
+    data wins, and that is not necessarily the active_render one.
+
+    Matching the name sidesteps it. The join merges the two by name into one layer, and
+    joinUvTextures returns immediately on its `len(uv_layers) <= 1` guard. Extra uv sets
+    stay as extra layers instead of competing to fill layer 0.
+
+    Coordinates are untouched - only the label changes. relocateGeograftUvIsland is the
+    one that moves them, and it runs straight after this in the same loop.
+    """
+    mesh = ob.data
+    if not mesh.uv_layers:
+        print("renameGeograftUvLayer: {0} has no uv layer".format(ob.name))
+        return None
+
+    # active_render lives on uv_textures (MeshTexturePolyLayer) in 2.79 - uv_layers
+    # (MeshUVLoopLayer) has no such attribute. Both are views of the same CustomData
+    # layer, so an index found on one indexes the other.
+    render_index = 0
+    for index, uv_texture in enumerate(mesh.uv_textures):
+        if uv_texture.active_render:
+            render_index = index
+            break
+
+    layer = mesh.uv_layers[render_index]
+    if layer.name == target_name:
+        return target_name
+
+    # Renaming onto a name another layer already holds would make Blender disambiguate it
+    # to "UVMap.001", which defeats the whole point.
+    for index, other in enumerate(mesh.uv_layers):
+        if index != render_index and other.name == target_name:
+            print("renameGeograftUvLayer: {0} already has a layer called \"{1}\" - "
+                  "leaving \"{2}\" alone".format(ob.name, target_name, layer.name))
+            return None
+
+    previous_name = layer.name
+    layer.name = target_name
+    print("renameGeograftUvLayer: {0} uv layer \"{1}\" -> \"{2}\"".format(
+        ob.name, previous_name, target_name))
+    return target_name
+
+
+def bindGeograftToArmature(geograft_object, armature_object):
+    """Point the geograft's ARMATURE modifier at `armature_object`, KEEPING its parent.
+
+    Deliberately NOT bindMeshToArmature. That one clears the parent - correct for
+    body_subdiv_cage, which must stay top-level - but the geograft's parent is
+    load-bearing: exporter_unreal.get_geograft_children finds grafts by walking
+    body_subdiv_cage.children, so an unparented graft is silently not exported.
+
+    Until this existed the clone kept the modifier it was duplicated with, pointing at the
+    GEOGRAFT'S OWN Daz rig. That rig is hidden by the end of Manny FULL but not deleted,
+    so the graft went on deforming with an unposed Daz skeleton while the body followed
+    Manny - the graft visibly detaching as soon as the Manny rig was posed.
+    """
+    modifier = None
+    for mod in geograft_object.modifiers:
+        if mod.type == 'ARMATURE':
+            modifier = mod
+            break
+    if modifier is None:
+        modifier = geograft_object.modifiers.new(name="Armature", type='ARMATURE')
+
+    previous = modifier.object.name if modifier.object else None
+    modifier.object = armature_object
+    modifier.use_vertex_groups = True
+    print("bindGeograftToArmature: {0} -> {1} (was {2}); parent {3} kept".format(
+        geograft_object.name, armature_object.name, previous,
+        geograft_object.parent.name if geograft_object.parent else None))
+    return modifier
 
 
 def renameGeograft(ob, short_name, index):
@@ -596,12 +884,31 @@ def renameGeograft(ob, short_name, index):
 
 
 def applyGeograftMaterial(ob, original_name, material_mode):
-    """Replace the geograft's material slots with the one its profile names.
+    """Replace the geograft's material slots with the one its profile's role resolves to.
 
     Only for geografts whose profile has a `material_role`. Anything else keeps its own
-    materials - correct default for a tail or wings, which have textures worth keeping,
-    and which have no reason to land on the body's genital slot.
+    materials - correct default for a tail or wings, which ship with textures worth
+    keeping and have no reason to land on the body material.
+
+    In the MODERN scheme the genital role resolves to mat_fullbody, so the graft ends up
+    on the SAME material as the body. That is what the FullBody Unreal graph wants: it
+    separates body from graft by UV tile, not by material slot.
+
+    In SPLITBODY the same role resolves to mat_gens instead, and the graft stays a slot of
+    its own through the join - a join merges slots by material DATABLOCK, and mat_gens is
+    not any of the body's region materials, so there is nothing to fold into. That is the
+    whole point of the mode: Unreal hides the graft by swapping that slot to DONT_RENDER,
+    with no UV-tile test in the shader.
+
+    DAZ is skipped entirely. "Keep the stock Daz surfaces exactly as imported" has to mean
+    the geograft too - otherwise the body keeps its Daz surfaces while the graft gets a
+    mat_ material the body does not even have.
     """
+    if material_mode == 'DAZ':
+        print("applyGeograftMaterial: DAZ mode - {0} keeps its stock Daz materials".format(
+            ob.name))
+        return None
+
     profile = geograftProfile(original_name)
     if not profile or not profile.get("material_role"):
         print("applyGeograftMaterial: {0} keeps its own materials".format(ob.name))
@@ -623,6 +930,114 @@ def applyGeograftMaterial(ob, original_name, material_mode):
     ob.data.materials.append(mat)
     print("applyGeograftMaterial: {0} -> {1}".format(ob.name, material_name))
     return material_name
+
+
+# ---------------------------------------------------------------------------
+# Censor vertex colours
+#
+# Replaces the censor MATERIAL. Instead of parking the censor region on its own material
+# slot, the region is marked in vertex colour and the Unreal material masks on it:
+#
+#   whole body   white  (1, 1, 1)
+#   censor region cyan  (0, 1, 1)   <- red channel is the mask
+#
+# The Unreal graph reads VertexColor -> ComponentMask(R) -> If(A > 0 ? 1 : 0), gated by a
+# "Show Gens?" scalar, into Opacity Mask. Red exactly 0 hides the face; anything above 0
+# keeps it. So the body's crotch geometry underneath the genital geograft can be switched
+# off at runtime without a second material slot and without deleting geometry - the same
+# job Daz's own face-hiding mask does, but reversible in the material.
+#
+# WHY VERTEX COLOUR IS PER-LOOP AND WHY THAT MATTERS
+#
+# Blender stores vertex colour per LOOP (per face-corner), not per vertex. Painting from
+# the FACE list is therefore exactly right, and painting per-VERTEX would be wrong:
+#
+#   per-loop  every corner of a censor face is 0, so R interpolates to 0 across the whole
+#             face -> hidden. Every corner of a neighbouring face is 1 -> visible. The
+#             boundary lands exactly on the face edge.
+#   per-vertex a boundary face would have some corners 0 and some 1, R would ramp across
+#             it, and the material's `> 0` test would keep most of it visible - a ragged,
+#             half-masked edge.
+#
+# So no vertex index list is needed, and one would actively make the mask worse.
+# ---------------------------------------------------------------------------
+
+CENSOR_VERTEX_COLOR_LAYER = "Col"
+CENSOR_VERTEX_COLOR = (0.0, 1.0, 1.0)   # cyan - red channel 0 is what the mask reads
+BODY_VERTEX_COLOR = (1.0, 1.0, 1.0)     # white - everything that stays visible
+
+
+def ensureVertexColorLayer(ob, fill_color=BODY_VERTEX_COLOR):
+    """Get or create the vertex colour layer on `ob`, filled with `fill_color`.
+
+    Made active for render as well as active for edit: the 2.79 FBX exporter writes every
+    layer it finds (there is no use_mesh_colors toggle to set), but Unreal keeps only one
+    colour channel, so which layer is the render one decides what arrives.
+    """
+    mesh = ob.data
+    layer = mesh.vertex_colors.get(CENSOR_VERTEX_COLOR_LAYER)
+    if layer is None:
+        layer = mesh.vertex_colors.new(name=CENSOR_VERTEX_COLOR_LAYER)
+    mesh.vertex_colors.active = layer
+    layer.active_render = True
+
+    loop_count = len(mesh.loops)
+    if loop_count:
+        # 2.79 stores RGB, later versions RGBA. Read the stride off the data rather than
+        # assuming, or foreach_set silently mismatches.
+        stride = len(layer.data[0].color)
+        channels = list(fill_color) + [1.0] * (stride - len(fill_color))
+        layer.data.foreach_set("color", channels[:stride] * loop_count)
+    return layer
+
+
+def paintCensorVertexColors(ob, geograft_objects):
+    """Paint the body white and the censor region cyan, per loop, from the FACE table.
+
+    Returns the number of faces painted. Zero is a legitimate result - no geograft, or one
+    with no table entry - and leaves the mesh uniformly white, i.e. nothing masked.
+    """
+    layer = ensureVertexColorLayer(ob, BODY_VERTEX_COLOR)
+
+    face_indices = set()
+    contributors = []
+    for geograft_object in geograft_objects or []:
+        faces = censorFacesForGeograft(geograft_object)
+        if not faces:
+            print("paintCensorVertexColors: geograft \"{0}\" has an empty DazMaskGroup "
+                  "and no override - it contributes nothing".format(geograft_object.name))
+            continue
+        face_indices.update(faces)
+        contributors.append(geograft_object.name)
+
+    if not face_indices:
+        print("paintCensorVertexColors: nothing to mask - body left fully white")
+        return 0
+
+    mesh = ob.data
+    polygon_count = len(mesh.polygons)
+    stride = len(layer.data[0].color)
+    cyan = list(CENSOR_VERTEX_COLOR) + [1.0] * (stride - len(CENSOR_VERTEX_COLOR))
+    cyan = cyan[:stride]
+
+    painted = 0
+    out_of_range = 0
+    for face_index in face_indices:
+        if not (0 <= face_index < polygon_count):
+            out_of_range += 1
+            continue
+        polygon = mesh.polygons[face_index]
+        for loop_index in range(polygon.loop_start,
+                                polygon.loop_start + polygon.loop_total):
+            layer.data[loop_index].color = cyan
+        painted += 1
+
+    mesh.update()
+    if out_of_range:
+        print("paintCensorVertexColors: {0} indices outside the mesh ({1} polygons) - "
+              "wrong topology?".format(out_of_range, polygon_count))
+    print("paintCensorVertexColors: {0} faces cyan from {1}".format(painted, contributors))
+    return painted
 
 
 def tagMaterialEngineIds(material_name, localname, objectname):
@@ -715,11 +1130,78 @@ def applyFullBodyMaterialConversion(ob):
         reassignMaterialSlotIndices(ob, merge_indices, names['fullbody'])
 
 
+def applySplitBodyMaterialConversion(ob):
+    """One material per body REGION, instead of one for the whole body.
+
+    Nine slots: mat_face, mat_torso, mat_legs, mat_arms, mat_mouth, mat_gens,
+    mat_censor, mat_eyelashes, DONT_RENDER. The geograft and the censor region are filled
+    in elsewhere (applyGeograftMaterial and assignCensorFaces respectively) - this pass
+    handles the body's own surfaces.
+
+    WHY, since this is the opposite of what FullBody does:
+
+    Unreal cannot dynamically index separate texture objects, so a single body material
+    has to multiplex its six UDIM tile textures with a Switch node. MaterialExpressionSwitch
+    compiles to a SUM OF PRODUCTS, not a branch, so every input executes on every pixel.
+    Measured on the albedo-only material: 8 pixel-shader texture lookups where 1 is used.
+    Adding normal + ORM + displacement would take that to roughly 26. Per-region materials
+    make it ~3, and a new map type then costs one fetch instead of six.
+
+    HOW IT DIFFERS FROM FULLBODY: FullBody merges by EXCLUSION - protect two names, sweep
+    the rest into the body material - which is robust because it needs no surface list.
+    SplitBody cannot do that: it has to know which region a surface belongs to, so it
+    matches by name against SPLIT_BODY_REGION_MATERIALS. The unmatched sweep at the end is
+    what keeps that from silently losing a custom surface.
+    """
+    names = SPLIT_MATERIAL_NAMES
+
+    # The two exceptions first, exactly as FullBody does them, and for the same reasons:
+    # eyelashes need translucency in Unreal and cannot share a slot with opaque skin; the
+    # eye interior is dropped outright rather than hidden inside the skull.
+    #
+    # Done first because each call removes slots and shifts every index behind it - the
+    # region pass below re-reads the slot list each time for the same reason.
+    reassignMaterialsAndRemoveSlots(ob, EYE_INTERIOR_MATERIALS, names['dont_render'])
+    reassignMaterialsAndRemoveSlots(ob, EYELASH_MATERIALS, names['eyelashes'])
+
+    # One region at a time. reassignMaterialsAndRemoveSlots re-reads ob.material_slots on
+    # entry, so removals from the previous region cannot leave a stale index behind.
+    for role, daz_surfaces in SPLIT_BODY_REGION_MATERIALS:
+        target = names.get(role)
+        if not target:
+            print("applySplitBodyMaterialConversion: no material for role \"{0}\" - "
+                  "skipped".format(role))
+            continue
+        reassignMaterialsAndRemoveSlots(ob, daz_surfaces, target)
+
+    # Anything still standing matched no region list: a custom surface, a renamed one, or
+    # a Daz figure that is not stock G3F. Sweep it into the fallback so it is still
+    # skinned, and NAME IT, because silently skinning an unknown surface as torso is the
+    # kind of thing that is only noticed three exports later.
+    #
+    # Every target name is protected, including the ones this pass did not create -
+    # mat_gens and mat_censor may already exist if a geograft was processed first, and
+    # sweeping either into the fallback would undo exactly what the mode is for.
+    protected_names = [name for name in names.values() if name]
+    protected_indices = set(_slotIndicesMatchingPrefixes(ob, protected_names))
+    leftover_indices = [index for index in range(len(ob.material_slots))
+                        if index not in protected_indices]
+    if leftover_indices:
+        leftover_names = [ob.material_slots[i].name for i in leftover_indices]
+        print("applySplitBodyMaterialConversion: {0} unmatched surface(s) -> {1}: "
+              "{2}".format(len(leftover_names), names[SPLIT_BODY_FALLBACK_ROLE],
+                           leftover_names))
+        reassignMaterialSlotIndices(ob, leftover_indices,
+                                    names[SPLIT_BODY_FALLBACK_ROLE])
+    else:
+        print("applySplitBodyMaterialConversion: every surface matched a region")
+
+
 def ensureLegacyGameMaterials(ob):
     """Make sure all 21 legacy body_* materials exist as slots, creating empties.
 
-    LEGACY only. The other modes do not have a fixed material table to fill in, and
-    get just the two placeholders from ensurePlaceholderMaterials instead.
+    LEGACY only. The other modes have no fixed material table to fill in - they end up
+    with whatever the conversion actually produced and nothing reserved.
     """
     game_material_names = [
     'body_teeth01',
@@ -817,7 +1299,7 @@ def sortLegacyMaterialSlots(ob):
             bpy.ops.object.material_slot_move(direction='DOWN')
 
 
-def convertG3FDifeomorphicToVXModFBody(material_mode='FULLBODY') :
+def convertG3FDifeomorphicToVXModFBody(material_mode='SPLITBODY') :
     isMyArmature = checkIfActiveObjectIs("ARMATURE","Genesis 3 Female")
     if (isMyArmature):
         pass
@@ -853,12 +1335,12 @@ def convertG3FDifeomorphicToVXModFBody(material_mode='FULLBODY') :
     print("found {0} geograft(s): {1}".format(
         len(geograftMeshes), [g.name for g in geograftMeshes]))
 
-    # (original Daz name, clone). The ORIGINAL name is what the profile and censor
-    # tables are keyed by, and it is gone from the clone the moment it is renamed, so
-    # it has to be captured here.
+    # (original geograft object, clone). The ORIGINAL object is kept, not just its
+    # name: profile lookups need the name, which the clone loses the moment it is
+    # renamed, AND censorFacesForGeograft needs the mesh data, which is where
+    # DazMaskGroup lives.
     geograftClones = []
     for geograftMesh in geograftMeshes:
-        original_name = geograftMesh.name
         setActiveObject(geograftMesh)
         activateObject(geograftMesh)
         bpy.ops.object.duplicate(linked=False)
@@ -866,11 +1348,25 @@ def convertG3FDifeomorphicToVXModFBody(material_mode='FULLBODY') :
         clone.parent = None
         #actually reassign it
         clone.parent = bodyMeshCloned
-        geograftClones.append((original_name, clone))
+        geograftClones.append((geograftMesh, clone))
 
-    for original_name, new_name in zip([n for n, _c in geograftClones],
-                                       assignGeograftNames(geograftClones)):
-        print("geograft {0} -> {1}".format(original_name, new_name))
+    for original_object, new_name in zip([g for g, _c in geograftClones],
+                                         assignGeograftNames(geograftClones)):
+        print("geograft {0} -> {1}".format(original_object.name, new_name))
+
+    # Match the body's uv layer NAME so the merge joins them by name rather than leaning
+    # on joinUvTextures' origin-is-empty heuristic. renameGeograftUvLayer touches only the
+    # label; relocateGeograftUvIsland is the one that moves coordinates, onto the tile the
+    # graft's profile reserves - otherwise the graft lands on top of the body's FACE tile
+    # and anything unwrapping the mesh into a texture writes the two over each other.
+    #
+    # Both run on the CLONE and before the join, so the merged body arrives with the
+    # island already where Unreal expects it. The original name is what the profile
+    # lookup needs - by here the clone has been renamed to geograft_<N>_<short>, which
+    # matches no table key.
+    for original_object, clone in geograftClones:
+        renameGeograftUvLayer(clone)
+        relocateGeograftUvIsland(clone, original_object.name)
     #
     #gensMeshCloned.parent
     
@@ -925,7 +1421,7 @@ def convertG3FDifeomorphicToVXModFBody(material_mode='FULLBODY') :
     # fallback that ran the LEGACY conversion while still reporting an unknown mode
     # would get body_* materials from the conversion and mat_* placeholders on top -
     # two schemes on one mesh, which is exactly what per-mode naming exists to prevent.
-    if material_mode not in ('DAZ', 'LEGACY', 'FULLBODY'):
+    if material_mode not in ('DAZ', 'LEGACY', 'FULLBODY', 'SPLITBODY'):
         print("unknown material conversion mode {0}, falling back to LEGACY".format(
             material_mode))
         material_mode = 'LEGACY'
@@ -935,6 +1431,8 @@ def convertG3FDifeomorphicToVXModFBody(material_mode='FULLBODY') :
         applyLegacyMaterialConversion(bodyMeshCloned)
     elif material_mode == 'FULLBODY':
         applyFullBodyMaterialConversion(bodyMeshCloned)
+    elif material_mode == 'SPLITBODY':
+        applySplitBodyMaterialConversion(bodyMeshCloned)
     else:
         # DAZ: nothing to do. The stock Daz surfaces stay exactly as imported - they
         # were already copied above, so the originals on the Difeomorphic body are safe.
@@ -984,11 +1482,40 @@ def convertG3FDifeomorphicToVXModFBody(material_mode='FULLBODY') :
     # be empty at sweep time and get pruned before it could be filled. And after
     # sortLegacyMaterialSlots, which is why assignCensorFaces looks the slot up by name
     # rather than trusting an index from before the sort.
-    ensurePlaceholderMaterials(ob, material_mode)
-    # The ORIGINAL geograft names, not the clones' - the clones have been renamed to
-    # geograft_<N>_<short> by now and would never match a table key.
-    assignCensorFaces(ob, material_mode,
-                      [original_name for original_name, _clone in geograftClones])
+    # NO placeholder material pass any more. Both placeholders it used to create are
+    # gone: the censor region is vertex colour, and the genital geograft shares
+    # mat_fullbody with the body. Nothing needs an empty slot reserved for it.
+    #
+    # LEGACY is unaffected - ensureLegacyGameMaterials above still creates
+    # body_main_censor and body_genital01 from the frozen 21-name table.
+
+    # The ORIGINAL geografts, not the clones - the clones have been renamed to
+    # geograft_<N>_<short> by now and would never match a table key, and the original is
+    # the one certain to carry Diffeomorphic's DazMaskGroup.
+    geograftOriginals = [original_object for original_object, _clone in geograftClones]
+
+    # SPLITBODY additionally puts the censor region on its OWN MATERIAL SLOT, so Unreal
+    # can toggle it by swapping that slot rather than classifying vertex colour in the
+    # shader. assignCensorFaces creates mat_censor itself when there is something to put
+    # in it - the placeholder pass that used to reserve it is gone.
+    #
+    # Ordering: before paintCensorVertexColors only for readability; the two do not
+    # interact. One writes material_index, the other writes a colour layer.
+    if material_mode == 'SPLITBODY':
+        assignCensorFaces(ob, material_mode, geograftOriginals)
+
+    # The censor region is ALSO marked in vertex colour, in every mode including
+    # SPLITBODY. It costs nothing, the other modes depend on it, and it keeps the
+    # shader-side path available. To make a non-split mode use the material approach
+    # instead, call assignCensorFaces unconditionally.
+    paintCensorVertexColors(ob, geograftOriginals)
+
+    # Geograft clones get an explicit white layer so the post-merge result is defined.
+    # Without it they arrive at the join with no colour layer at all, and what the join
+    # fills in for the missing side is not something to leave to chance on a mask that
+    # decides whether geometry is visible.
+    for _original_object, clone in geograftClones:
+        ensureVertexColorLayer(clone, BODY_VERTEX_COLOR)
 
     # Legacy engine identities, and deliberately still spelled with the LEGACY material
     # names. Those materials do not exist in DAZ or FULLBODY, so tagMaterialEngineIds
@@ -1067,12 +1594,13 @@ def convertG3FDifeomorphicToVXModFBody(material_mode='FULLBODY') :
     #lets add this property
     ob.data["json_sk_exporter"] = "bbb_eye_L_morph,bbb_eye_R_morph,bbb_vagfix_morph"
 
-    # Per geograft, driven by its profile's material_role. Genitalia gets the mode's
-    # genital material (body_genital01 in LEGACY, mat_genital otherwise); anything
-    # without a role - a tail, wings - keeps its own materials, which is what you want
-    # for something that ships with its own textures.
-    for original_name, clone in geograftClones:
-        applyGeograftMaterial(clone, original_name, material_mode)
+    # Per geograft, driven by its profile's material_role. The genital role resolves to
+    # body_genital01 in LEGACY and to mat_fullbody in the modern scheme - i.e. the graft
+    # shares the BODY material, which is what the Unreal graph expects since it separates
+    # them by UV tile. DAZ is skipped so stock Daz surfaces stay stock. Anything with no
+    # role - a tail, wings - keeps its own materials.
+    for original_object, clone in geograftClones:
+        applyGeograftMaterial(clone, original_object.name, material_mode)
 
     #lets end
     activateObject(bodyMeshCloned)

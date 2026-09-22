@@ -984,6 +984,33 @@ def bindMeshToArmature(mesh_object, armature_object, modifier_name="Armature"):
     return modifier
 
 
+def collapseRulesForMesh(mesh_object, rules=None):
+    """The subset of collapse rules whose SOURCE groups this mesh actually has.
+
+    mergeBonesIntoTargets creates the TARGET group whenever it is missing -
+    merge_vgroups_into_existing does it so head / lowerJaw / foot.L keep their own weights
+    - which is right for the body, where every target is a real weighted group.
+
+    It is wrong for a geograft. Running the full rule set over geograft_0_genz added four
+    EMPTY groups (head, lowerJaw, foot.L, foot.R) to a mesh whose only weights are thigh,
+    thigh_twist and pelvis: 5 groups became 9, none of the new ones carrying anything.
+
+    Filtering by what the mesh can actually be weighted to keeps a graft's group list
+    honest, and costs the body nothing - it has every source, so it gets every rule.
+
+    Returns a dict in the same {target: [sources]} shape mergeBonesIntoTargets expects.
+    """
+    if rules is None:
+        rules = dict_bones.bone_collapse_rules
+    if mesh_object is None or mesh_object.type != 'MESH':
+        return {}
+
+    present = set(vgroup.name for vgroup in mesh_object.vertex_groups)
+    return dict((target_name, source_names)
+                for target_name, source_names in rules.items()
+                if present.intersection(source_names))
+
+
 def mergeBonesIntoTargets(mesh_object, armature_object, rules=None, delete_bones=True):
     """
     Fold several bones' weights into one, then delete the merged bones.
