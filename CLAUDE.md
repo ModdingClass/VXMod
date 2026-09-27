@@ -1208,6 +1208,31 @@ still being in the scene.
 
 ---
 
+## UE5 export orientation: every bone, no gimbal locks (2026-09-27, commit 7cd3c20)
+
+In `exporter_unreal.py`, `orient_bones_for_unreal_from_blender_perfect`:
+
+- **Every bone is converted, the Daz extras too.** Before, only bones in `manny_blender_perfect_generated` took the
+  BP -> BF roll and the BF -> UE5 +/-90; the extras got only the +180 and landed in Unreal running along Y and hinging
+  about X, the reverse of every Manny bone. `ue5_convention_donors` now gives each extra a Manny DONOR whose delta and
+  flip it borrows: central extra -> nearest Manny ancestor (jaw, tongue, cyclops -> head; stomach -> spine_02); sided
+  extra with a sided ancestor -> that ancestor (toes -> ball_l/r); sided extra with a central ancestor -> clavicle_<side>
+  above the pelvis (pectoral chain, eyes, ears), thigh_<side> on it (butt). Result in Unreal: X along the bone, Z = its
+  hinge, L/R mirrored. Simulated on the rig before shipping (min 59.8 deg from a lock). The export log prints the
+  donor list.
+- **Foot tilt.** `reaim_feet_for_unreal` sets foot X exactly vertical by construction -> exact Euler gimbal lock.
+  Unreal's FBX import (which rebuilds the bind pose) turned foot_r 12.8 deg while foot_l came through clean, although the
+  FBX itself was symmetric. `FOOT_REAIM_TILT_DEGREES = 1.0` turns the frame 1 deg about its level hinge. Do not set 0.
+- **`check_gimbal_margins`** runs immediately before each `export_scene.fbx` and prints every bone within
+  `GIMBAL_WARN_DEGREES` (0.5) of the lock (the FBX stores parent-relative Euler XYZ; the middle angle near +/-90 is the
+  lock). Run right after orienting it MISSED cyclops - the transform apply and bone rebuild in between still move
+  frames of bones pointing along -Y, where Blender's roll maths is ill-conditioned.
+- **Fixing a flagged bone:** a TILT only helps a bone whose export X runs along it (Manny/converted bones). For a bone
+  whose X is its hinge, only a roll or a different frame helps - that is why the jaw/cyclops tilts failed and the
+  donor conversion fixed them. `setupStomachBone` keeps a 2 deg `tilt_up_degrees` (it works there).
+- Everything built against the old extra frames in Unreal needs redoing: garments weighted to extras must be
+  re-exported, Control Rigs that copy the hierarchy refreshed, bone-inverse sockets recomputed.
+
 ## SplitBody mode
 
 Added 2026-09-05. One material per body **region** instead of one for the whole body.
