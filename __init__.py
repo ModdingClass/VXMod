@@ -311,6 +311,15 @@ class VXMOD_vars(bpy.types.PropertyGroup) :
              "the censor region their own slots also lets Unreal hide them by "
              "swapping a material, with no UV-tile test or vertex-colour mask in the "
              "shader at all"),
+            ('DAZSPLIT', "DazSplit",
+             "Like SplitBody, but every Daz surface keeps its own slot, renamed mat_ + "
+             "the lowercased Daz name (Torso -> mat_torso, Arms -> mat_arms), "
+             "except Face + Ears + EyeSocket + Lips -> mat_face, Mouth + Teeth -> "
+             "mat_mouth, Sclera + Irises + Pupils -> mat_eyes and Cornea + "
+             "EyeMoisture -> mat_cornea. The "
+             "Daz material settings are kept. The genital "
+             "geograft gets mat_gens and the censor region mat_censor, as in "
+             "SplitBody. Nothing is sent to DONT_RENDER"),
         ],
         default='SPLITBODY',
     )

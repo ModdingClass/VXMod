@@ -380,11 +380,27 @@ SPLIT_MATERIAL_NAMES = {
 }
 
 
+# DAZSPLIT: every Daz surface keeps its own slot, renamed mat_<lowercased daz name> -
+# see applyDazSplitMaterialConversion. Only the roles the rest of the pipeline asks for
+# by name live here; the per-surface names are derived, not tabulated.
+#
+# The graft and censor behave exactly as in SPLITBODY (own slots, hidden in Unreal by a
+# slot swap). dont_render is None: nothing goes to DONT_RENDER in this mode for now, the
+# eye interior keeps mat_cornea, mat_sclera, ... like every other surface.
+DAZSPLIT_MATERIAL_NAMES = {
+    'fullbody': None,
+    'dont_render': None,
+    'eyelashes': "mat_eyelashes",
+    'genital': "mat_gens",
+    'censor': "mat_censor",
+}
+
+
 def materialNamesForMode(material_mode):
     """The name table for a mode.
 
-    THREE schemes: LEGACY has its own, SPLITBODY has its own, and DAZ + FULLBODY share
-    the modern one. Anything unrecognised gets modern, which is safe because
+    FOUR schemes: LEGACY, SPLITBODY and DAZSPLIT each have their own, and DAZ + FULLBODY
+    share the modern one. Anything unrecognised gets modern, which is safe because
     convertG3FDifeomorphicToVXModFBody normalizes an unknown mode to LEGACY before any
     of this runs - see the comment at that guard for why the normalization has to happen
     there rather than here.
@@ -393,6 +409,8 @@ def materialNamesForMode(material_mode):
         return LEGACY_MATERIAL_NAMES
     if material_mode == 'SPLITBODY':
         return SPLIT_MATERIAL_NAMES
+    if material_mode == 'DAZSPLIT':
+        return DAZSPLIT_MATERIAL_NAMES
     return MODERN_MATERIAL_NAMES
 
 
@@ -1197,6 +1215,109 @@ def applySplitBodyMaterialConversion(ob):
         print("applySplitBodyMaterialConversion: every surface matched a region")
 
 
+# DAZSPLIT only. Daz surfaces folded into ANOTHER Daz surface's material instead of
+# getting their own. Keyed by bare Daz name -> the bare Daz name whose material they join.
+# Everything not listed keeps its own slot.
+#
+# A target need not be a real Daz surface: "Eyes" is ours, since the eyeball has no
+# single Daz name. Such a group keeps the material of whichever of its slots comes first.
+DAZSPLIT_SURFACE_MERGES = {
+    "Ears": "Face",
+    "EyeSocket": "Face",
+    "Lips": "Face",
+    "Teeth": "Mouth",
+    "Sclera": "Eyes",
+    "Irises": "Eyes",
+    "Pupils": "Eyes",
+    "EyeMoisture": "Cornea",
+}
+
+
+def dazSplitMaterialName(slot_name):
+    """"Eyelashes-1.001" -> "mat_eyelashes", "Ears-1" -> "mat_face". Both import
+    suffixes are stripped first (see normalizeMaterialName), DAZSPLIT_SURFACE_MERGES is
+    applied, then the Daz name is lowercased and prefixed."""
+    surface = normalizeMaterialName(slot_name)
+    surface = DAZSPLIT_SURFACE_MERGES.get(surface, surface)
+    return "mat_" + surface.lower()
+
+
+def applyDazSplitMaterialConversion(ob):
+    """One slot per Daz surface, renamed mat_<lowercased daz name>.
+
+    Like SPLITBODY in that the body stays split and the graft / censor get mat_gens /
+    mat_censor, but with almost no region grouping: Torso stays mat_torso, Arms stays
+    mat_torso. The only merges are DAZSPLIT_SURFACE_MERGES (Ears + EyeSocket + Lips ->
+    mat_face, Teeth -> mat_mouth, Sclera + Irises + Pupils -> mat_eyes, EyeMoisture ->
+    mat_cornea). Nothing is sent to DONT_RENDER.
+
+    The slot keeps its MATERIAL - the copy made at the top of the conversion is renamed
+    in place, so the Daz textures and settings survive. If the name is already taken by
+    another datablock (a previous conversion, typically) the slot is pointed at that one
+    instead, because renaming onto a taken name gets a ".001" that would then reach
+    Unreal as the section's material name.
+
+    Slots that resolve to the same name are merged into one. The surviving material is
+    the one whose OWN Daz name is the target (Face's for mat_face, not Ears'), so the
+    merged-in surfaces take on its settings rather than the other way round.
+    """
+    if not _materialSlotsAreDataLinked(ob):
+        # The operator path can only address slots by name; route each surface through
+        # it one at a time. Loses the Daz material settings, but this path is not hit by
+        # Diffeomorphic imports.
+        for slot_name in [slot.name for slot in ob.material_slots]:
+            target = dazSplitMaterialName(slot_name)
+            if slot_name != target:
+                reassignMaterialsAndRemoveSlots(ob, [slot_name], target)
+        return
+
+    mesh = ob.data
+
+    # Group slots by target name, first-seen order, so the slot order stays Daz's.
+    targets = []
+    indices_by_target = {}
+    for index, slot in enumerate(ob.material_slots):
+        target = dazSplitMaterialName(slot.name)
+        if target not in indices_by_target:
+            indices_by_target[target] = []
+            targets.append(target)
+        indices_by_target[target].append(index)
+
+    remap = {}
+    keep = []
+    for target in targets:
+        indices = indices_by_target[target]
+        own = [i for i in indices
+               if "mat_" + normalizeMaterialName(ob.material_slots[i].name).lower()
+               == target]
+        first = own[0] if own else indices[0]
+        mat = mesh.materials[first]
+        if mat is None or mat.name != target:
+            existing = bpy.data.materials.get(target)
+            if existing is not None:
+                mesh.materials[first] = existing
+            elif mat is not None:
+                mat.name = target
+            else:
+                mesh.materials[first] = bpy.data.materials.new(name=target)
+        for index in indices:
+            remap[index] = len(keep)
+        keep.append(first)
+        if len(indices) > 1:
+            print("applyDazSplitMaterialConversion: {0} slots merged into {1}".format(
+                len(indices), target))
+
+    if len(keep) != len(mesh.materials):
+        # rebuildMaterialSlots remaps only the KEPT indices; point the merged ones at
+        # their survivor first, so it sees each dropped index as an already-kept one.
+        _remapPolygonMaterialIndices(
+            mesh, dict((i, keep[remap[i]]) for i in remap), fallback=0)
+        rebuildMaterialSlots(ob, keep)
+
+    print("applyDazSplitMaterialConversion: {0}".format(
+        [slot.name for slot in ob.material_slots]))
+
+
 def ensureLegacyGameMaterials(ob):
     """Make sure all 21 legacy body_* materials exist as slots, creating empties.
 
@@ -1421,7 +1542,7 @@ def convertG3FDifeomorphicToVXModFBody(material_mode='SPLITBODY') :
     # fallback that ran the LEGACY conversion while still reporting an unknown mode
     # would get body_* materials from the conversion and mat_* placeholders on top -
     # two schemes on one mesh, which is exactly what per-mode naming exists to prevent.
-    if material_mode not in ('DAZ', 'LEGACY', 'FULLBODY', 'SPLITBODY'):
+    if material_mode not in ('DAZ', 'LEGACY', 'FULLBODY', 'SPLITBODY', 'DAZSPLIT'):
         print("unknown material conversion mode {0}, falling back to LEGACY".format(
             material_mode))
         material_mode = 'LEGACY'
@@ -1433,6 +1554,8 @@ def convertG3FDifeomorphicToVXModFBody(material_mode='SPLITBODY') :
         applyFullBodyMaterialConversion(bodyMeshCloned)
     elif material_mode == 'SPLITBODY':
         applySplitBodyMaterialConversion(bodyMeshCloned)
+    elif material_mode == 'DAZSPLIT':
+        applyDazSplitMaterialConversion(bodyMeshCloned)
     else:
         # DAZ: nothing to do. The stock Daz surfaces stay exactly as imported - they
         # were already copied above, so the originals on the Difeomorphic body are safe.
@@ -1501,7 +1624,7 @@ def convertG3FDifeomorphicToVXModFBody(material_mode='SPLITBODY') :
     #
     # Ordering: before paintCensorVertexColors only for readability; the two do not
     # interact. One writes material_index, the other writes a colour layer.
-    if material_mode == 'SPLITBODY':
+    if material_mode in ('SPLITBODY', 'DAZSPLIT'):
         assignCensorFaces(ob, material_mode, geograftOriginals)
 
     # The censor region is ALSO marked in vertex colour, in every mode including

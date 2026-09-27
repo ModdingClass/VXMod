@@ -282,6 +282,7 @@ does nothing until the next run.
 | `LEGACY` | The original conversion, unchanged — collapse onto the 21 `body_*` names, pad the table, sort slots into legacy engine index order. |
 | `FULLBODY` | Everything onto `mat_fullbody`, with two exceptions. |
 | `SPLITBODY` | One material per body REGION, plus own slots for the graft and censor. Nine slots. **Default.** |
+| `DAZSPLIT` | One slot per Daz SURFACE, renamed `mat_` + lowercased Daz name (`Face-1.001` → `mat_face`), except the merges in `DAZSPLIT_SURFACE_MERGES`: Face + Ears + EyeSocket + Lips → `mat_face`, Mouth + Teeth → `mat_mouth`, Sclera + Irises + Pupils → `mat_eyes`, Cornea + EyeMoisture → `mat_cornea`. The surviving material is the one whose own Daz name is the target (Face, Mouth, Cornea); `mat_eyes` has no such surface, so it keeps the first eye slot's. Eye groupings match `ShadersForDaz3dAssets` in the UE project: `MI_Iris`/`MI_Pupils`/`MI_Sclera` all parent `M_EyesSimple`, `MI_Cornea`/`MI_EyeMoisture` both parent `M_Invisible`. The copied Daz material is renamed in place, so its settings survive; if the name is taken the existing datablock is reused instead of getting `.001`. Graft → `mat_gens`, censor → `mat_censor` as in SPLITBODY. **Nothing goes to `DONT_RENDER`** (eye interior stays visible as `mat_eyes` / `mat_cornea`). Table: `DAZSPLIT_MATERIAL_NAMES`. |
 
 ### FullBody exceptions
 
