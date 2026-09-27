@@ -1053,7 +1053,68 @@ def orient_bones_for_unreal(armature_clone, armature_object):
     reorient_bones_for_unreal(armature_clone, armature_object)
 
 
-def blender_perfect_to_blender_friendly(armature_clone):
+# EVERY Daz extra is converted to the UE5 convention too, borrowing the roll delta
+# and flip of a Manny "donor". Without this an extra only gets the +180 roll and
+# lands in Unreal running along Y and hinging about X, the reverse of every Manny
+# bone - lowerJaw's X then lined up with head's Z, an exact gimbal lock (see
+# check_gimbal_margins), and so did cyclops_joint01 and, once the jaw moved,
+# tongue01. With a donor the extra's X runs along it and its Z is its hinge.
+#
+# The donor is picked by rule, so a new extra is covered without a table entry:
+#   central extra                  -> its nearest Manny ancestor (jaw, tongue and
+#                                     cyclops -> head, stomach -> spine_02)
+#   sided extra, sided ancestor    -> that ancestor (toes -> ball_l / ball_r)
+#   sided extra, central ancestor  -> clavicle_<side> above the pelvis (pectoral
+#                                     chain, eyes, ears), thigh_<side> on it (butt):
+#                                     the arm and leg mirror rules respectively
+#
+# Simulated on the real rig before use (2026-09-27): every bone's X along the bone,
+# L/R pairs mirrored to 0.17 deg (the rig's own asymmetry, at the butt), every
+# converted extra at least 59.8 deg from a lock. lowerJaw, the tongue and cyclops
+# were verified in Unreal first.
+#
+# Changing an extra's frame changes what it means to everything built against
+# it: re-export every garment weighted to it (leader pose shares component space,
+# each mesh keeps its own bind frames), refresh the hierarchy of Control Rigs that
+# copy the skeleton, and re-align sockets placed with bone-inverse rotations.
+
+
+def _bone_side(name):
+    """'l', 'r' or None, for thigh.L, thigh_l and Daz-style lEye / rEar."""
+    if len(name) > 2 and name[-2] in '._' and name[-1] in 'LlRr':
+        return name[-1].lower()
+    if len(name) > 1 and name[0] in 'lr' and name[1].isupper():
+        return name[0]
+    return None
+
+
+def ue5_convention_donors(armature_clone):
+    """{extra bone name: Manny bone whose constants it borrows}. See above."""
+    from .g3f import manny_blender_perfect_generated as manny_bp
+
+    donors = {}
+    for bone in armature_clone.data.bones:
+        if manny_bp.getBpToBfRollDelta(bone.name) is not None:
+            continue                        # a Manny bone uses its own constants
+        ancestor = bone.parent
+        while ancestor is not None and manny_bp.getBpToBfRollDelta(ancestor.name) is None:
+            ancestor = ancestor.parent
+        if ancestor is None:
+            print("  UE5 donors: '{}' has no Manny ancestor - left as it is"
+                  .format(bone.name))
+            continue
+        ancestor_key = manny_bp.normalizeBoneName(ancestor.name)
+        side = _bone_side(bone.name)
+        if side is None or _bone_side(ancestor.name) is not None:
+            donors[bone.name] = ancestor_key
+        elif ancestor_key == "pelvis":
+            donors[bone.name] = "thigh_" + side
+        else:
+            donors[bone.name] = "clavicle_" + side
+    return donors
+
+
+def blender_perfect_to_blender_friendly(armature_clone, donors=None):
     """Step 1 of 2: BlenderPerfect -> BlenderFriendly. Roll only.
 
     BlenderFriendly is the orientation defined by the property that a single
@@ -1068,7 +1129,7 @@ def blender_perfect_to_blender_friendly(armature_clone):
     rolled = 0
     untouched = []
     for ebone in armature_clone.data.edit_bones:
-        delta = manny_bp.getBpToBfRollDelta(ebone.name)
+        delta = manny_bp.getBpToBfRollDelta((donors or {}).get(ebone.name, ebone.name))
         if delta is None:
             untouched.append(ebone.name)
             continue
@@ -1082,7 +1143,7 @@ def blender_perfect_to_blender_friendly(armature_clone):
     return rolled
 
 
-def blender_friendly_to_ue5(armature_clone):
+def blender_friendly_to_ue5(armature_clone, donors=None):
     """Step 2 of 2: BlenderFriendly -> UE5.
 
     +/-90 about each bone's own Z axis, the sign taken from flippedBones - the
@@ -1112,10 +1173,11 @@ def blender_friendly_to_ue5(armature_clone):
     flipped_count = 0
     untouched = []
     for ebone in ebones:
-        if manny_bp.getBpToBfRollDelta(ebone.name) is None:
+        convention_name = (donors or {}).get(ebone.name, ebone.name)
+        if manny_bp.getBpToBfRollDelta(convention_name) is None:
             untouched.append(ebone.name)
             continue
-        is_flipped = manny_bp.isFlipped(ebone.name)
+        is_flipped = manny_bp.isFlipped(convention_name)
         angle = -90.0 if is_flipped else 90.0
         ebone.matrix = ebone.matrix * Matrix.Rotation(math.radians(angle), 4, 'Z')
         rotated += 1
@@ -1169,6 +1231,15 @@ def _find_either_spelling(ebones, name):
     return None
 
 
+# Tilt the rebuilt foot X this far off vertical, turning the frame about its
+# own (level) hinge Z. An exactly vertical X is an exact Euler gimbal lock, and
+# Unreal's FBX import (which recreates the bind pose) turned foot_r 12.8 deg
+# while foot_l came through clean. With 1 deg the pair imports mirrored to
+# 0.04 deg (verified 2026-09-27). Manny's own foot X sits 1.81 deg off
+# vertical. Same angle on both sides keeps the pair mirrored. Do not set 0.0.
+FOOT_REAIM_TILT_DEGREES = 1.0
+
+
 def reaim_feet_for_unreal(armature_clone):
     """Rebuild the foot and ball frames from the rig's own geometry.
 
@@ -1217,6 +1288,10 @@ def reaim_feet_for_unreal(armature_clone):
         y = flat * (-1.0 if side == '.L' else 1.0)
         x = Vector((0.0, 0.0, vertical))
         z = x.cross(y).normalized()
+        # Turn X and Y about Z, so the hinge stays level (see FOOT_REAIM_TILT_DEGREES).
+        tilt = math.radians(FOOT_REAIM_TILT_DEGREES)
+        x, y = (x * math.cos(tilt) + y * math.sin(tilt),
+                y * math.cos(tilt) - x * math.sin(tilt))
 
         def frame(head):
             return Matrix(((x.x, y.x, z.x, head.x),
@@ -1237,6 +1312,67 @@ def reaim_feet_for_unreal(armature_clone):
     return done
 
 
+# The foot tilt (FOOT_REAIM_TILT_DEGREES) puts ik_foot_l/r exactly 1 deg out, and
+# they import clean; a 0.065 deg margin failed. 0.5 leaves room on both sides.
+GIMBAL_WARN_DEGREES = 0.5
+
+
+def check_gimbal_margins(armature_clone, warn_degrees=GIMBAL_WARN_DEGREES):
+    """Warn about every bone whose FBX local rotation sits near an Euler gimbal lock.
+
+    The FBX writer stores each bone relative to its parent as Euler XYZ. When the
+    middle angle nears +/-90 (the bone's X running along its parent's Z), the
+    split between X and Z becomes ill-conditioned and the float Euler no longer
+    rebuilds the matrix: cyclops_joint01 (0.0000 deg from the lock) came out 0.006
+    off with a 1.0014 scale. Unreal then fails the bind pose check (tolerance
+    0.0001, FbxSkeletalMeshImport.cpp), logs "Not valid bind pose ... The relative
+    matrices do not match" and rebuilds the bind pose for the WHOLE skeleton.
+    An exactly vertical foot also imported 12.8 deg skewed on one side only.
+
+    Read-only: reports, never moves a bone. Fix a flagged bone where it is built.
+    WHICH fix depends on what its export-frame X is. Bones with a Manny
+    counterpart run along X after the conversion, so tilting the direction
+    moves X (the feet). A bone left out of the conversion keeps the BlenderPerfect
+    frame (+180 roll), where X is the HINGE: that is how lowerJaw's X and head's Z
+    were both sideways, locked whatever its aim. Every Daz extra is converted now
+    (ue5_convention_donors), which fixed it.
+
+    Call it immediately before the FBX write. Run straight after
+    orient_bones_for_unreal it missed cyclops_joint01, which the FBX then held at
+    -90.002: the transform apply and the bone rebuild in between can still move
+    a frame, most likely for bones pointing along -Y, where Blender's roll maths
+    is ill-conditioned. Checked against a real export: the predicted middle
+    angles matched the FBX Lcl Rotation.
+
+    Returns [(margin_degrees, bone_name, parent_name, middle_angle)] for the bones
+    within warn_degrees, closest first.
+    """
+    if bpy.context.object is not None and bpy.context.object.mode != 'OBJECT':
+        bpy.ops.object.mode_set(mode='OBJECT')
+    flagged = []
+    for bone in armature_clone.data.bones:
+        if bone.parent is None:
+            continue
+        relative = (bone.parent.matrix_local.inverted() * bone.matrix_local).to_3x3()
+        # R = Rz * Ry * Rx, so R[2][0] = -sin(middle)
+        middle = degrees(math.asin(max(-1.0, min(1.0, -relative[2][0]))))
+        margin = 90.0 - abs(middle)
+        if margin < warn_degrees:
+            flagged.append((margin, bone.name, bone.parent.name, middle))
+    flagged.sort()
+    if flagged:
+        print("  WARNING gimbal check: {} bone(s) within {:.1f} deg of an Euler gimbal "
+              "lock - Unreal will likely reject the bind pose. Tilt them where they "
+              "are built:".format(len(flagged), warn_degrees))
+        for margin, name, parent_name, middle in flagged:
+            print("      {:<28} parent {:<20} middle {:+9.4f}  margin {:.4f} deg"
+                  .format(name, parent_name, middle, margin))
+    else:
+        print("  gimbal check: every bone at least {:.1f} deg from a lock"
+              .format(warn_degrees))
+    return flagged
+
+
 def apply_ue5_roll_correction(armature_clone):
     """Add 180 deg to every bone's roll. REQUIRED for a correct export.
 
@@ -1244,14 +1380,12 @@ def apply_ue5_roll_correction(armature_clone):
 
       * after reaim_feet_for_unreal, so the rebuilt foot and ball frames get it
         too - they are absolute, so anything applied before is discarded;
-      * over the Daz extras (toes, breasts, eyes, teeth, tongue) as well, which
-        skip the two conversion steps entirely because they have no Manny
-        counterpart. Whether a bare 180 is *right* for them is unknowable - there
-        is no reference to compare against - but it is what shipped and was
-        confirmed, so it stays until something says otherwise.
+      * over the Daz extras as well, which go through steps 1 and 2 with a
+        borrowed Manny donor (ue5_convention_donors) and so need it exactly like
+        the Manny bones. Anything the donor rule leaves out still gets it here.
 
     That is why this cannot be folded into blender_friendly_to_ue5: doing so
-    would quietly drop it from the feet and from all 41 extras.
+    would quietly drop it from the feet.
 
     Not a fudge, despite looking like one. The ArmatureUE5 reference that this
     whole convention was derived from is reconstructed by io_unreal_dump_importer
@@ -1516,8 +1650,9 @@ def orient_bones_for_unreal_from_blender_perfect(armature_clone):
         1  BP -> BF                 roll only
         2  BF -> UE5                +/-90 about each bone's own Z
         3  foot and ball re-aim     absolute, discards what 1 and 2 did to them
-        4  UE5 roll correction      +180 over EVERY bone, including the feet and
-                                    the Daz extras that steps 1 and 2 skip
+        4  UE5 roll correction      +180 over EVERY bone, including the feet
+                                    (the Daz extras take 1 and 2 through a
+                                    borrowed donor, see ue5_convention_donors)
         5  helper bones             the IK markers Manny has and the Daz rig does
                                     not, copied off the finished deform bones
 
@@ -1533,8 +1668,11 @@ def orient_bones_for_unreal_from_blender_perfect(armature_clone):
     means the reconstruction, not Unreal.
     """
     print("orient_bones_for_unreal_from_blender_perfect: {}".format(armature_clone.name))
-    blender_perfect_to_blender_friendly(armature_clone)
-    blender_friendly_to_ue5(armature_clone)
+    donors = ue5_convention_donors(armature_clone)
+    print("  UE5 donors for {} Daz extras: {}".format(
+        len(donors), sorted("{}<-{}".format(k, v) for k, v in donors.items())))
+    blender_perfect_to_blender_friendly(armature_clone, donors)
+    blender_friendly_to_ue5(armature_clone, donors)
     # Last, and absolute: it overwrites whatever the two steps did to the feet.
     reaim_feet_for_unreal(armature_clone)
     # After the feet, so the correction covers them too - the legacy pass was
@@ -2186,6 +2324,9 @@ def export_to_unreal_v2(params) : #exportfolderpath,
     "use_metadata": True,
     }
 
+    # Last thing before the write, on the bones exactly as they will be exported:
+    # the transform apply and the rebuild above can still move a frame.
+    check_gimbal_margins(armature_clone)
     bpy.ops.export_scene.fbx(**export_params)
 
     bpy.context.scene.unit_settings.system = 'NONE'
@@ -2383,6 +2524,9 @@ def export_animation_to_unreal(params):
         "batch_mode": 'OFF',
         "use_metadata": True,
     }
+    # Last thing before the write, on the bones exactly as they will be exported:
+    # the transform apply and the rebuild above can still move a frame.
+    check_gimbal_margins(armature_clone)
     bpy.ops.export_scene.fbx(**export_params)
 
     bpy.context.scene.unit_settings.system = 'NONE'

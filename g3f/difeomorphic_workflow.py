@@ -2194,7 +2194,7 @@ def _buildJiggleBone(mesh_object, armature_object, joint_name, end_name,
                      vertical_reach=(1.0, 1.0), lower_fullness=0.0,
                      lower_limit_indices=None, lower_limit_overshoot=1.0,
                      plateau=0.0, plateau_below=None,
-                     upper_scale=1.0, peak_depth=1.0):
+                     upper_scale=1.0, peak_depth=1.0, tilt_up_degrees=0.0):
     """
     Build one mesh-derived jiggle bone plus its _end stub, and borrow it weight.
 
@@ -2223,6 +2223,11 @@ def _buildJiggleBone(mesh_object, armature_object, joint_name, end_name,
     vanishes from the export and Unreal draws the joint as a nub, not a bone.
     (`dontExportJointEnds` is NOT what governs this - declared at __init__.py:219
     and never read anywhere.)
+
+    `tilt_up_degrees` then lowers the head so the bone points that far above
+    horizontal, tail kept on the surface point. A perfectly horizontal bone off a
+    vertical spine bone is an Euler gimbal lock in the export frame; see
+    setupCyclopsBone and exporter_unreal.check_gimbal_margins.
 
     WEIGHTS are moved, not added: what the joint gains is subtracted from the
     source, so total influence per vertex is unchanged and the mesh does not shift
@@ -2305,6 +2310,10 @@ def _buildJiggleBone(mesh_object, armature_object, joint_name, end_name,
     surface = getCenter(list(top_indices), mesh_object)
     if flatten_head_z:
         centre.z = surface.z
+    if tilt_up_degrees:
+        run = surface - centre
+        run.z = 0.0
+        centre.z = surface.z - run.length * math.tan(math.radians(tilt_up_degrees))
     axis = surface - centre
     if axis.length < 1e-6:
         print("  jiggle '{}': head and tail are coincident - skipped".format(joint_name))
@@ -2588,6 +2597,11 @@ def setupCyclopsBone(mesh_object, armature_object, parent_name="head",
     only spares a non-deforming bone when it has a DEFORMING child, which a leaf
     never has.
 
+    EXPORTED IN THE UE5 CONVENTION (exporter_unreal.ue5_convention_donors). As a
+    plain Daz extra its export X was a sideways hinge parallel to head's Z, an
+    Euler gimbal lock whatever its aim, which failed Unreal's bind pose check and
+    made Unreal rebuild the bind pose for the whole skeleton. Tilting it did not help.
+
     Returns the created bone names, or [].
     """
     if mesh_object is None or mesh_object.type != 'MESH':
@@ -2735,18 +2749,21 @@ def setBoneTailToVertices(mesh_object, armature_object, bone_name, vertex_indice
 
 def setupStomachBone(mesh_object, armature_object, parent_name="spine_02",
                      source_groups=("spine_02",), radius=0.16, max_weight=0.35,
-                     forward_only=True, end_length=0.02):
+                     forward_only=True, end_length=0.02, tilt_up_degrees=2.0):
     """
     Belly jiggle bone: stomach_joint01 -> stomach_end, off spine_02.
 
     Central, so no side test. Borrows from spine_02, which is what owns the belly.
     See _buildJiggleBone for the mechanics and the export/idempotency notes.
+
+    Tilted up 2 deg: flat, it sat 0.03-0.07 deg from a gimbal lock against
+    spine_02 and failed Unreal's bind pose check.
     """
     created, touched, moved = _buildJiggleBone(
         mesh_object, armature_object, "stomach_joint01", "stomach_end",
         stomach_base, stomach_top, parent_name, source_groups,
         radius, max_weight, forward_only=forward_only, side_sign=None,
-        end_length=end_length)
+        end_length=end_length, tilt_up_degrees=tilt_up_degrees)
     print("setupStomachBone: {}".format(created or "nothing built"))
     return (created, touched, moved)
 
