@@ -56,6 +56,7 @@ from .exporter_fake_bones import *
 from .exporter_z_cleanup_values import *
 
 from .tools_duplicate_object_remove_mats_shapekeys import *
+from .tools_fix_eye_morphs import *
 from .helper_vgroups import *
 from .g3f.importer_g3f_difeomorphic import *
 from .g3f.difeomorphic_workflow import *
@@ -541,6 +542,31 @@ class DebugBonesPanel(bpy.types.Panel):
         row.operator('vxmod.fake',text='              ')
 
 
+class OtherFixesPanel(bpy.types.Panel):
+    """Creates a Panel in the Tool Shelf"""
+    bl_label = "Other Fixes"
+    bl_idname = "vxmod.other_fixes_panel"
+    bl_space_type = 'VIEW_3D'
+    bl_region_type = 'TOOLS'
+    bl_category = "VXMod"
+
+    def draw(self,context):
+        layout=self.layout
+        box = layout.box()
+        row=box.row(align=True)
+        row.operator('vxmod.fix_eye_morphs',text='Fix eye morphs',icon='VISIBLE_IPO_ON')
+        row.operator('vxmod.fake',text='              ')
+        row.operator('vxmod.fake',text='              ')
+        row=box.row(align=True)
+        row.operator('vxmod.fake',text='              ')
+        row.operator('vxmod.fake',text='              ')
+        row.operator('vxmod.fake',text='              ')
+        row=box.row(align=True)
+        row.operator('vxmod.fake',text='              ')
+        row.operator('vxmod.fake',text='              ')
+        row.operator('vxmod.fake',text='              ')
+
+
 class EXPORT_PT_VXModToUnreal(bpy.types.Panel):
     """Creates a Panel in the Tool Shelf"""
     bl_label = "Unreal Exporter"
@@ -703,7 +729,36 @@ class ARMATURE_OT_move_jointend_bones_to_custom_layer(bpy.types.Operator):
         scene  = bpy.context.scene
         vxmod  = scene.vxmod
         moveJointEndBonesToCustomLayer()
-        return {'FINISHED'}  
+        return {'FINISHED'}
+
+class MESH_OT_fix_eye_morphs(bpy.types.Operator):
+    ''''''
+    bl_idname = "vxmod.fix_eye_morphs"
+    bl_label = "Fix eye morphs"
+    bl_description = "Take the eyeballs (mat_eyes, mat_cornea) out of the 8 eyeLook shape keys, keep the lids. The eye bone does the turning in Unreal"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    def execute(self, context):
+        ob = context.active_object
+        if ob is None or ob.type != 'MESH' or ob.data.shape_keys is None:
+            self.report({'WARNING'}, "Select the body mesh (with shape keys) first.")
+            return {'CANCELLED'}
+        # Edit Mode keeps its own copy of the shape key data; leave it so the change sticks.
+        was_edit = (ob.mode == 'EDIT')
+        if was_edit:
+            bpy.ops.object.mode_set(mode='OBJECT')
+        count, fixed, missing = fixEyeMorphs(ob)
+        if was_edit:
+            bpy.ops.object.mode_set(mode='EDIT')
+        if count == 0:
+            self.report({'WARNING'}, "No eyeball vertices: no material slot named {}.".format(' / '.join(EYE_MATERIALS)))
+            return {'CANCELLED'}
+        message = "Fix eye morphs: {} shape key(s) fixed, {} eyeball verts".format(len(fixed), count)
+        if missing:
+            message += ", not found: " + ', '.join(missing)
+        print(message)
+        self.report({'WARNING'} if missing else {'INFO'}, message)
+        return {'FINISHED'}
 
 class ARMATURE_OT_hh_pose_ik(bpy.types.Operator):
     ''''''

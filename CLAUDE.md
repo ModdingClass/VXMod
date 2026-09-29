@@ -42,6 +42,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - `exporter_fake_bones.py` — Debug visualization bones
 - `fjson.py` — Custom JSON serializer with controlled float formatting (used for skeleton export)
 - `tools_import_export_*_json.py` — JSON import/export for vertex groups, shape keys, materials, edit bones
+- `tools_fix_eye_morphs.py` — "Fix eye morphs" (panel **Other Fixes**, below Debug Bones, `vxmod.fix_eye_morphs`): puts the eyeball verts (`mat_eyes`, `mat_cornea`) back to rest in the 8 ARKit `eyeLook*` shape keys, lids kept. Why: in Unreal the gaze node rotates the eye BONE; the baked eyeball rotation in the shapes doubled it (2026-09-29). Run before exporting the body. The other panel slots are `vxmod.fake` placeholders for future fixes.
 - `dictionary_g3f_vertices.py` — Hardcoded vertex index lists for G3F body regions (breasts, nipples, etc.)
 - `dictionary_shapekeys.py` / `dictionary_materials.py` — Name mapping dictionaries
 - `globals.py` — Shared state: `animSkeletonValuesExtra` (OrderedDict) and `sharedGlobals` class
