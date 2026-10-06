@@ -43,6 +43,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - `fjson.py` — Custom JSON serializer with controlled float formatting (used for skeleton export)
 - `tools_import_export_*_json.py` — JSON import/export for vertex groups, shape keys, materials, edit bones
 - `tools_fix_eye_morphs.py` — "Fix eye morphs" (panel **Other Fixes**, below Debug Bones, `vxmod.fix_eye_morphs`): puts the eyeball verts (`mat_eyes`, `mat_cornea`) back to rest in the 8 ARKit `eyeLook*` shape keys, lids kept. Why: in Unreal the gaze node rotates the eye BONE; the baked eyeball rotation in the shapes doubled it (2026-09-29). Run before exporting the body. The other panel slots are `vxmod.fake` placeholders for future fixes.
+- `tools_fix_eyelashes.py` — "Fix eyelashes offset" (panel **Other Fixes**, next to Fix eye morphs, `vxmod.fix_eyelashes`): G3F lashes are twin cards; sculpting moves one and not the other. Puts each of the 180 secondary verts back at its primary + the base G3F offset, in the mesh AND every shape key. Pairs + WORLD-space offsets in `g3f/g3f_eyelashes_offsets.py` (`EYELASH_PAIRS = {secondary: (primary, (dx, dy, dz))}`), written on the base G3F by `Tools/Blender/g3f_eyelash_capture.py` in the VXMod UE project (nearest primary on the same strip, one-to-one; offsets ~0.00017). Both eye fixes re-read their data file on every click (importlib.reload), so a fresh capture needs no addon reload.
+- "Fix eyeball moisture" (panel **Other Fixes**, second row, `vxmod.fix_eyeball_moisture`, in `tools_fix_eyelashes.py`): the eye moisture film over the eyeballs (274 verts) follows the nearest sclera/cornea vertex (274, one-to-one) + a WORLD-space offset (~0.00026), mesh AND every shape key. Data `g3f/g3f_eyeball_moisture_offsets.py` (`EYEBALL_MOISTURE_PAIRS = {moisture: (neighbour, (dx, dy, dz))}`), written by `Tools/Blender/g3f_eyeball_moisture_capture.py`. Same `fixVertexPairs` as the eyelashes.
+- `tools_fix_eye_moisture.py` — "Fix eye moisture" (panel **Other Fixes**, after Fix eyelashes offset, `vxmod.fix_eye_moisture`): the eye moisture tubes (13 rings of 4 verts per eye) stray from the lower lids after sculpting. Per ring the SECOND vertex is the anchor: anchor = its lower-lid vertex + offset, the other 3 = anchor + offset, in the mesh AND every shape key. Data `g3f/g3f_eyemoisture_offsets.py` (`EYE_MOISTURE_RINGS = [(lid, anchor, (dx, dy, dz), ((vertex, (dx, dy, dz)), x3)), ...]`), WORLD-space offsets (an unapplied import rotation on either mesh does not matter), written on the base G3F by `Tools/Blender/g3f_eye_moisture_capture.py` in the VXMod UE project; loaded only when the button is pressed (missing file = warning, the addon still loads).
 - `dictionary_g3f_vertices.py` — Hardcoded vertex index lists for G3F body regions (breasts, nipples, etc.)
 - `dictionary_shapekeys.py` / `dictionary_materials.py` — Name mapping dictionaries
 - `globals.py` — Shared state: `animSkeletonValuesExtra` (OrderedDict) and `sharedGlobals` class
@@ -1267,7 +1270,7 @@ matches by name against `SPLIT_BODY_REGION_MATERIALS`. The groupings follow the 
 map exactly, because that is what the Unreal side keys its per-region textures off.
 
 The guard is the leftover sweep at the end of `applySplitBodyMaterialConversion`: anything
-matching no region goes to `SPLIT_BODY_FALLBACK_ROLE` (`mat_torso`) **and is printed by
+matching no region goes to `SPLIT_BODY_FALLBACK_ROLE` (`mat_torso`) **and is written by
 name**. A custom or renamed surface is then loud rather than silently skinned as torso.
 Every target name is protected from that sweep, including `mat_gens` and `mat_censor`,
 which may already exist if a geograft was processed first.

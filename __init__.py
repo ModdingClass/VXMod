@@ -57,6 +57,8 @@ from .exporter_z_cleanup_values import *
 
 from .tools_duplicate_object_remove_mats_shapekeys import *
 from .tools_fix_eye_morphs import *
+from .tools_fix_eyelashes import *
+from .tools_fix_eye_moisture import *
 from .helper_vgroups import *
 from .g3f.importer_g3f_difeomorphic import *
 from .g3f.difeomorphic_workflow import *
@@ -555,10 +557,10 @@ class OtherFixesPanel(bpy.types.Panel):
         box = layout.box()
         row=box.row(align=True)
         row.operator('vxmod.fix_eye_morphs',text='Fix eye morphs',icon='VISIBLE_IPO_ON')
-        row.operator('vxmod.fake',text='              ')
-        row.operator('vxmod.fake',text='              ')
+        row.operator('vxmod.fix_eyelashes',text='Fix eyelashes offset',icon='HAIR')
+        row.operator('vxmod.fix_eye_moisture',text='Fix eye moisture',icon='MOD_FLUIDSIM')
         row=box.row(align=True)
-        row.operator('vxmod.fake',text='              ')
+        row.operator('vxmod.fix_eyeball_moisture',text='Fix eyeball moisture',icon='MATSPHERE')
         row.operator('vxmod.fake',text='              ')
         row.operator('vxmod.fake',text='              ')
         row=box.row(align=True)
@@ -758,6 +760,105 @@ class MESH_OT_fix_eye_morphs(bpy.types.Operator):
             message += ", not found: " + ', '.join(missing)
         print(message)
         self.report({'WARNING'} if missing else {'INFO'}, message)
+        return {'FINISHED'}
+
+class MESH_OT_fix_eyelashes(bpy.types.Operator):
+    ''''''
+    bl_idname = "vxmod.fix_eyelashes"
+    bl_label = "Fix eyelashes offset"
+    bl_description = "Move every secondary eyelash card vertex back to its primary vertex + the base G3F offset, in the mesh and all shape keys"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    def execute(self, context):
+        pairs = loadEyelashPairs()
+        if pairs is None:
+            self.report({'WARNING'}, "No g3f/g3f_eyelashes_offsets.py: capture it on the base G3F first.")
+            return {'CANCELLED'}
+        ob = context.active_object
+        needed = max(max(pairs), max(p for p, _d in pairs.values())) + 1
+        if ob is None or ob.type != 'MESH' or len(ob.data.vertices) < needed:
+            self.report({'WARNING'}, "Select the G3F body mesh first.")
+            return {'CANCELLED'}
+        # Edit Mode keeps its own copy of the mesh; leave it so the change sticks.
+        prev_mode = ob.mode
+        if prev_mode != 'OBJECT':
+            bpy.ops.object.mode_set(mode='OBJECT')
+        result = fixVertexPairs(ob, pairs)
+        if prev_mode != 'OBJECT':
+            bpy.ops.object.mode_set(mode=prev_mode)
+        for name, moved in result:
+            if moved:
+                print("Fix eyelashes offset: {} - {} vert(s) moved".format(name, moved))
+        changed = sum(1 for _name, moved in result if moved)
+        message = "Fix eyelashes offset: {} of {} target(s) changed, {} pairs".format(changed, len(result), len(pairs))
+        print(message)
+        self.report({'INFO'}, message)
+        return {'FINISHED'}
+
+class MESH_OT_fix_eyeball_moisture(bpy.types.Operator):
+    ''''''
+    bl_idname = "vxmod.fix_eyeball_moisture"
+    bl_label = "Fix eyeball moisture"
+    bl_description = "Put the eye moisture film back on the eyeballs (each vertex at its nearest sclera/cornea vertex + the base G3F offset), in the mesh and all shape keys"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    def execute(self, context):
+        pairs = loadEyeballMoisturePairs()
+        if pairs is None:
+            self.report({'WARNING'}, "No g3f/g3f_eyeball_moisture_offsets.py: capture it on the base G3F first.")
+            return {'CANCELLED'}
+        ob = context.active_object
+        needed = max(max(pairs), max(n for n, _d in pairs.values())) + 1
+        if ob is None or ob.type != 'MESH' or len(ob.data.vertices) < needed:
+            self.report({'WARNING'}, "Select the G3F body mesh first.")
+            return {'CANCELLED'}
+        # Edit Mode keeps its own copy of the mesh; leave it so the change sticks.
+        prev_mode = ob.mode
+        if prev_mode != 'OBJECT':
+            bpy.ops.object.mode_set(mode='OBJECT')
+        result = fixVertexPairs(ob, pairs)
+        if prev_mode != 'OBJECT':
+            bpy.ops.object.mode_set(mode=prev_mode)
+        for name, moved in result:
+            if moved:
+                print("Fix eyeball moisture: {} - {} vert(s) moved".format(name, moved))
+        changed = sum(1 for _name, moved in result if moved)
+        message = "Fix eyeball moisture: {} of {} target(s) changed, {} pairs".format(changed, len(result), len(pairs))
+        print(message)
+        self.report({'INFO'}, message)
+        return {'FINISHED'}
+
+class MESH_OT_fix_eye_moisture(bpy.types.Operator):
+    ''''''
+    bl_idname = "vxmod.fix_eye_moisture"
+    bl_label = "Fix eye moisture"
+    bl_description = "Put the eye moisture tubes back on the lower lids (base G3F offsets), in the mesh and all shape keys"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    def execute(self, context):
+        rings = loadEyeMoistureRings()
+        if rings is None:
+            self.report({'WARNING'}, "No g3f/g3f_eyemoisture_offsets.py: capture it on the base G3F first.")
+            return {'CANCELLED'}
+        ob = context.active_object
+        needed = max(max([lid, a] + [v for v, _d in others]) for lid, a, _da, others in rings) + 1
+        if ob is None or ob.type != 'MESH' or len(ob.data.vertices) < needed:
+            self.report({'WARNING'}, "Select the G3F body mesh first.")
+            return {'CANCELLED'}
+        # Edit Mode keeps its own copy of the mesh; leave it so the change sticks.
+        prev_mode = ob.mode
+        if prev_mode != 'OBJECT':
+            bpy.ops.object.mode_set(mode='OBJECT')
+        result = fixEyeMoisture(ob, rings)
+        if prev_mode != 'OBJECT':
+            bpy.ops.object.mode_set(mode=prev_mode)
+        for name, moved in result:
+            if moved:
+                print("Fix eye moisture: {} - {} vert(s) moved".format(name, moved))
+        changed = sum(1 for _name, moved in result if moved)
+        message = "Fix eye moisture: {} of {} target(s) changed, {} rings".format(changed, len(result), len(rings))
+        print(message)
+        self.report({'INFO'}, message)
         return {'FINISHED'}
 
 class ARMATURE_OT_hh_pose_ik(bpy.types.Operator):
