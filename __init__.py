@@ -431,6 +431,12 @@ class VXMOD_CONVERTER_OT_PanelDifeomorphicToVXMod(bpy.types.Panel):
         row.operator('vxmod.switch_to_manny_vertex_groups',
                      text='Vertex Groups only', icon='GROUP_VERTEX')
 
+        # Garments come after the rig is final, so this only needs the rig to exist.
+        row = step2_box.row(align=True)
+        row.enabled = manny_armature is not None
+        row.operator('vxmod.convert_cloth_to_manny',
+                     text='Cloth '+u'→'+' Manny (selected)', icon='MOD_CLOTH')
+
         # Roll comparison. The label reports the current state and says what a
         # click will do, so it reads as a switch rather than a fire-and-forget.
         state = (manny_armature.data.get(ORIENTATION_PROP)
@@ -1489,6 +1495,53 @@ class ARMATURE_OT_Toggle_Blender_Perfect_Rolls(bpy.types.Operator):
         self.report({'INFO'}, "%s rolls: %s"
                     % (armature_object.name,
                        "BlenderPerfect" if state == ORIENTATION_BP else "Diffeomorphic"))
+        return {'FINISHED'}
+
+
+class MESH_OT_Convert_Cloth_To_Manny(bpy.types.Operator):
+    '''
+    Convert the Daz vertex groups of the selected garment(s) to the Manny rig that
+    Manny FULL built: bind, rename, collapse, and the twist / pectoral splits, so the
+    garment deforms like the skin under it. The armature is never modified.
+    '''
+    bl_idname = "vxmod.convert_cloth_to_manny"
+    bl_label = ""
+    bl_description = ("Convert the selected Daz-weighted mesh(es) to the Manny armature: "
+                      "rename, merge, split twists and pectorals like the body")
+    bl_options = {'UNDO'}
+
+    def execute(self, context):
+        vxmod = context.scene.vxmod
+        vx_armature = bpy.data.objects.get("Armature")
+        if vx_armature is None or vx_armature.type != 'ARMATURE':
+            ShowMessageBox("No Manny 'Armature' in the scene. Run Manny FULL first.",
+                           "Error", 'ERROR')
+            return {'CANCELLED'}
+
+        # Optional: only used to match the pectoral split. Without it the garment
+        # is split over its own range, which the console says.
+        body_object, _error = findConvertedBodyMesh(vxmod.exportable_mesh)
+
+        garments = [ob for ob in context.selected_objects
+                    if ob.type == 'MESH' and ob is not body_object]
+        if not garments:
+            ShowMessageBox("Select one or more garment meshes (not the body).",
+                           "Error", 'ERROR')
+            return {'CANCELLED'}
+
+        # Same per-side modes the body was built with, or the splits disagree.
+        pectoral_modes = {"L": vxmod.pectoralWeightModeL.lower(),
+                          "R": vxmod.pectoralWeightModeR.lower()}
+        unmatched = 0
+        for garment in garments:
+            unmatched += len(convertClothVertexGroupsToManny(
+                garment, vx_armature, body_object, pectoral_modes))
+
+        if unmatched:
+            self.report({'WARNING'}, "{} mesh(es) converted, {} group(s) with no bone - "
+                        "see the console".format(len(garments), unmatched))
+        else:
+            self.report({'INFO'}, "{} mesh(es) converted to Manny".format(len(garments)))
         return {'FINISHED'}
 
 

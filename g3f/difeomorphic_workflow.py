@@ -2119,7 +2119,7 @@ def toggleFishingRig(armature_object=None, sides=("L", "R"),
 
 
 def _splitPectoralWeights(mesh_object, source_name, near_name, far_name, geometry,
-                          mode, low, high, percentile=0.05):
+                          mode, low, high, percentile=0.05, t_range=None):
     """
     Split source_name's weights between near_name and far_name across [low, high].
 
@@ -2154,6 +2154,12 @@ def _splitPectoralWeights(mesh_object, source_name, near_name, far_name, geometr
     All samples are read before anything is written, because name_01 is both the
     source and one of the destinations.
 
+    `t_range` = (lo, hi) skips the percentile pass and uses that range instead.
+    convertClothVertexGroupsToManny passes the BODY's range, so a garment hands
+    over between the two bones at the same depth as the skin under it. Measured
+    on the garment's own vertices, a bra cup that covers only part of the breast
+    would hand over somewhere else and clip.
+
     Returns (verts_written, lo, hi) where lo/hi are the raw t values that got
     mapped to 0 and 1, or None if name_01 has no weights.
     """
@@ -2187,10 +2193,13 @@ def _splitPectoralWeights(mesh_object, source_name, near_name, far_name, geometr
     # Percentile rather than min/max so a single stray weighted vertex - a stray
     # from a morph, or bleed from a neighbouring group - cannot stretch the range
     # and flatten the gradient for everything else.
-    ordered = sorted(t for _i, _w, t in samples)
-    last = len(ordered) - 1
-    lo = ordered[int(percentile * last)]
-    hi = ordered[int((1.0 - percentile) * last)]
+    if t_range is not None:
+        lo, hi = t_range
+    else:
+        ordered = sorted(t for _i, _w, t in samples)
+        last = len(ordered) - 1
+        lo = ordered[int(percentile * last)]
+        hi = ordered[int((1.0 - percentile) * last)]
     extent = hi - lo
     band = high - low
 
@@ -2938,6 +2947,178 @@ def switchVertexGroupsToManny(mesh_object, armature_object=None, delete_unmapped
         print("      {}".format(boneless))
 
     return (renamed, merged, leftover)
+
+
+def _boneSegmentWorld(armature_object, head_bone_name, tail_bone_name=None):
+    """(head, unit direction, length) of a bone in WORLD space, or None.
+
+    With tail_bone_name the segment runs from the first bone's head to the second
+    bone's tail - how the pectoral is measured, since the original Daz bone now
+    spans pectoral_base.head .. pectoral_joint02.tail.
+
+    World rather than armature space, so it agrees with the matrix_world * v.co
+    the weight passes sample even when the armature object is moved.
+    """
+    bones = armature_object.data.bones
+    head_bone = bones.get(head_bone_name)
+    tail_bone = bones.get(tail_bone_name or head_bone_name)
+    if head_bone is None or tail_bone is None:
+        return None
+    matrix = armature_object.matrix_world
+    head = matrix * head_bone.head_local
+    tail = matrix * tail_bone.tail_local
+    length = (tail - head).length
+    if length <= 0.0:
+        return None
+    return (head, (tail - head).normalized(), length)
+
+
+def _pectoralTRange(body_object, group_names, geometry, mode, percentile=0.05):
+    """The (lo, hi) the BODY's pectoral split used, recovered after the fact.
+
+    setupPectoralChain moved pectoral_base's weights onto joint01 + joint02, so
+    the vertices weighted on either of those are exactly the set it sampled, and
+    measuring them against the same segment gives back the same range.
+    Returns None if the body carries no pectoral weight.
+    """
+    if body_object is None:
+        return None
+    indices = set(vg.index for vg in body_object.vertex_groups if vg.name in group_names)
+    if not indices:
+        return None
+    head, direction, length = geometry
+    matrix = body_object.matrix_world
+    ts = []
+    for v in body_object.data.vertices:
+        if any(g.group in indices and g.weight > 0.0 for g in v.groups):
+            offset = (matrix * v.co) - head
+            ts.append(offset.length / length if mode == "radial"
+                      else offset.dot(direction) / length)
+    if not ts:
+        return None
+    ts.sort()
+    last = len(ts) - 1
+    return (ts[int(percentile * last)], ts[int((1.0 - percentile) * last)])
+
+
+def convertClothVertexGroupsToManny(mesh_object, armature_object, body_object=None,
+                                    pectoral_modes=None):
+    """
+    Bring a Daz-weighted garment onto an EXISTING Manny armature.
+
+    Manny FULL does this for the body while it builds the rig. A garment arrives
+    later, with the rig already final, so this runs only the WEIGHT half of that
+    pipeline and never touches a bone:
+
+      1. bind      ARMATURE modifier retargeted at the Manny rig (bindMeshToArmature)
+      2. rename    switchVertexGroupsToManny, the same 1:1 map as the body
+      3. collapse  face rig -> head / lowerJaw, heel + metatarsals -> foot
+      4. twists    each Daz twist split across _01/_02 exactly as on the body
+      5. pectoral  pectoral_base split onto joint01/joint02 with the body's range
+
+    Step 3 cannot go through mergeBonesIntoTargets: that skips any source bone not
+    in the rig, and Manny FULL has already DELETED the face, heel and metatarsal
+    bones - so on a finished rig it collapses nothing and the garment keeps groups
+    no bone drives. The rules are applied straight to the groups instead, and
+    only the rules whose sources the garment has (collapseRulesForMesh), so a
+    shirt does not grow empty head / foot groups.
+
+    Steps 4 and 5 are what make the garment deform WITH the skin. Leaving a Daz
+    twist on _01 only, or a bra on pectoral_base (which the body no longer uses),
+    would make it twist or swing differently from the body under it and clip.
+    Both are measured off the finished rig's bones, which is the geometry the body
+    was split against.
+
+    NOT matched: stomach_joint01 and butt_joint01.L/R. The body borrowed that
+    weight by a falloff around body vertex indices, which do not exist on a
+    garment. Clothing over those areas follows spine_02 / pelvis / thigh rigidly.
+
+    Idempotent: renamed groups are skipped, collapsed sources are gone, the twist
+    split reads the SUM of both twins, and pectoral_base is empty after the first
+    split.
+
+    Returns the list of groups left with no matching bone.
+    """
+    if mesh_object is None or mesh_object.type != 'MESH':
+        print("convertClothVertexGroupsToManny: first argument must be a mesh.")
+        return []
+    if armature_object is None or armature_object.type != 'ARMATURE':
+        print("convertClothVertexGroupsToManny: second argument must be an armature.")
+        return []
+    if pectoral_modes is None:
+        pectoral_modes = {"L": "axial", "R": "radial"}
+
+    print("=== Cloth -> Manny: '{}' on '{}' ===".format(mesh_object.name,
+                                                       armature_object.name))
+    if bpy.context.mode != 'OBJECT':
+        bpy.ops.object.mode_set(mode='OBJECT')
+
+    # 1. bind
+    bindMeshToArmature(mesh_object, armature_object)
+
+    # 2. rename. Its leftover report comes BEFORE the collapse, so it lists the
+    #    face/heel groups that are about to be folded - the final report is below.
+    switchVertexGroupsToManny(mesh_object, None)
+
+    # 3. collapse, group-level only
+    bone_names = set(armature_object.data.bones.keys())
+    for target_name, source_names in sorted(collapseRulesForMesh(mesh_object).items()):
+        if target_name not in bone_names:
+            print("  collapse: target '{}' not in the rig - {} left as they are"
+                  .format(target_name, source_names))
+            continue
+        written, used = merge_vgroups_into_existing(mesh_object, target_name, source_names)
+        for group_name in used:
+            deleteVertexGroup(mesh_object, group_name)
+        print("  collapse: {} group(s) -> '{}' ({} verts)"
+              .format(len(used), target_name, written))
+
+    # 4. twists
+    for parent_name, twists, _length_fraction in dict_bones.twist_bone_pairs:
+        (name_01, fraction_01), (name_02, fraction_02) = twists[0], twists[1]
+        geometry = _boneSegmentWorld(armature_object, parent_name)
+        if geometry is None:
+            continue
+        written = _splitTwistWeights(mesh_object, name_01, name_02, geometry,
+                                     fraction_01, fraction_02)
+        if written:
+            print("  twist: split {} verts between '{}' and '{}'"
+                  .format(written, name_01, name_02))
+
+    # 5. pectorals
+    for side in ("L", "R"):
+        base_name = "pectoral_base.{}".format(side)
+        name_01 = "pectoral_joint01.{}".format(side)
+        name_02 = "pectoral_joint02.{}".format(side)
+        if mesh_object.vertex_groups.get(base_name) is None:
+            continue
+        geometry = _boneSegmentWorld(armature_object, base_name, name_02)
+        if geometry is None:
+            print("  pectoral {}: rig has no '{}' - '{}' left as it is"
+                  .format(side, name_02, base_name))
+            continue
+        mode = pectoral_modes.get(side, "axial")
+        t_range = _pectoralTRange(body_object, (name_01, name_02), geometry, mode)
+        if t_range is None:
+            print("  pectoral {}: no body range to match, using the garment's own"
+                  .format(side))
+        result = _splitPectoralWeights(mesh_object, base_name, name_01, name_02,
+                                       geometry, mode, 0.25, 0.75, t_range=t_range)
+        if result is not None:
+            written, lo, hi = result
+            print("  pectoral {}: moved {} verts onto '{}' + '{}' ({}, t {:.2f}..{:.2f})"
+                  .format(side, written, name_01, name_02, mode, lo, hi))
+
+    # Final report: what the garment carries that no bone will drive.
+    leftover = sorted(vg.name for vg in mesh_object.vertex_groups
+                      if vg.name not in bone_names)
+    if leftover:
+        print("  {} group(s) have NO matching bone - their weight deforms nothing:"
+              .format(len(leftover)))
+        print("      {}".format(leftover))
+    else:
+        print("  every vertex group has a bone")
+    return leftover
 
 
 def applyBlenderPerfectRolls(vx_armature=None, verbose=True):
