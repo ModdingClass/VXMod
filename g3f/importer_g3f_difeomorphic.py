@@ -8,6 +8,11 @@ from ..g3f.difeomorphic_workflow_init_geografts import *
 from ..tools_message_box import *
 from ..utils_bpy import *
 
+# Object custom property marking the converted body mesh. Read by
+# findConvertedBodyMesh (difeomorphic_workflow.py) and stripped from the export
+# copies by exporter_unreal.py - keep the three spellings in step.
+BODY_MARKER_PROP = "vx_body"
+
 
 def checkIfMaterialExistElseCreateIt(ob, material_name):
     mat = bpy.data.materials.get(material_name)
@@ -1724,6 +1729,12 @@ def convertG3FDifeomorphicToVXModFBody(material_mode='SPLITBODY') :
     # role - a tail, wings - keeps its own materials.
     for original_object, clone in geograftClones:
         applyGeograftMaterial(clone, original_object.name, material_mode)
+
+    # Mark the output as THE converted body, so findConvertedBodyMesh finds it by
+    # this stamp rather than by name - it survives a rename (body_subdiv_cage ->
+    # BelaTest), and is set even when the rename above was skipped because an older
+    # body_subdiv_cage was already in the scene.
+    bodyMeshCloned[BODY_MARKER_PROP] = True
 
     #lets end
     activateObject(bodyMeshCloned)

@@ -42,6 +42,11 @@ ORIENTATION_UE5 = "UE5"
 # reachable by toggling the BlenderPerfect rolls back off, for comparison.
 ORIENTATION_DAZ = "DAZ"
 
+# Object custom property the G3F -> VX body conversion stamps on its output, so
+# findConvertedBodyMesh does not depend on the mesh's name. Kept in step with
+# importer_g3f_difeomorphic.py and exporter_unreal.py.
+BODY_MARKER_PROP = "vx_body"
+
 # Per-bone cache of the roll a bone had before applyBlenderPerfectRolls first
 # touched it, so the toggle can put it back. Written on the EditBone: Blender
 # copies custom properties both ways across an edit-mode round trip, so the value
@@ -905,12 +910,35 @@ def findConvertedBodyMesh(preferred_name=""):
     """
     Locate the mesh produced by the G3F -> VX body conversion.
 
-    body_subdiv_cage is the canonical name importer_g3f_difeomorphic.py:419 gives it, so
-    it is tried first and the panel's mesh selector is only a fallback - the selector
-    auto-follows the active object, which makes it an unreliable primary source.
+    The conversion stamps its output with the BODY_MARKER_PROP custom property, so
+    the body is found by that stamp, in the CURRENT scene, whatever it is named:
+      - one stamped mesh: that one.
+      - several (Shift+D copies the stamp, older conversions keep theirs): the one
+        the panel's mesh selector points at, else an error listing them - never a
+        guess.
+      - none (bodies converted before the stamp existed): the old lookup below,
+        body_subdiv_cage first, then the selector. The selector auto-follows the
+        active object, which makes it an unreliable primary source.
 
     Returns (mesh_object, error_message). Exactly one of the two is None.
     """
+    marked = [ob for ob in bpy.context.scene.objects
+              if ob.type == 'MESH' and ob.get(BODY_MARKER_PROP)]
+    if len(marked) == 1:
+        return (marked[0], None)
+    if len(marked) > 1:
+        for ob in marked:
+            if ob.name == preferred_name:
+                print("findConvertedBodyMesh: {} meshes carry '{}', using the "
+                      "selector's '{}'".format(len(marked), BODY_MARKER_PROP, ob.name))
+                return (ob, None)
+        return (None, "Several meshes are marked as the converted body ({}). Pick the "
+                      "one to use in the VXMod mesh selector, or delete the '{}' custom "
+                      "property from the others.".format(
+                          ", ".join(sorted(ob.name for ob in marked)), BODY_MARKER_PROP))
+
+    print("findConvertedBodyMesh: no mesh carries '{}', falling back to the name / "
+          "selector lookup".format(BODY_MARKER_PROP))
     mesh = bpy.data.objects.get("body_subdiv_cage")
     if mesh is not None and mesh.type == 'MESH':
         return (mesh, None)

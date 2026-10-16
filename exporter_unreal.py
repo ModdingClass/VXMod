@@ -17,6 +17,7 @@ from .diffeomorphic_merge_geografts import geograft_data_available, merge_geogra
 from .exporter_morph_bin import export_morph_bin, MORPH_BIN_SUFFIX, NUMPY_IMPORT_ERROR
 
 from . import fbody_stats
+from ._version import __version__
 #from . import strip_and_clean_op
 
 from mathutils import Vector
@@ -664,6 +665,10 @@ def build_subdivision_vertex_matching_table(params):
     bpy.ops.object.duplicate(linked=False)
     vxasset = bpy.context.scene.objects.active
     vxasset.name = "vxasset_base_res"
+    # A duplicate copies object custom properties: the export copy would also be
+    # "the converted body" to findConvertedBodyMesh, and reach Unreal as metadata.
+    if BODY_MARKER_PROP in vxasset:
+        del vxasset[BODY_MARKER_PROP]
 
     if params.includeGeograftsOnExportUnreal:
         print("includeGeograftsOnExportUnreal is ON")
@@ -950,6 +955,17 @@ def _notify_export_complete():
 
 
 ORIENTATION_PROP = "vx_orientation"
+# Stamped on the converted body by importer_g3f_difeomorphic.py and read by
+# findConvertedBodyMesh; stripped from the export copies. Keep in step.
+BODY_MARKER_PROP = "vx_body"
+# Stamped on every exported LOD for Unreal (VersaMap's import hook, MaterialUsageHandler.cpp; keep the
+# names in step): VXMOD_PROP = this addon's version (present = exported by VXMod), the kind, and where
+# the mesh came from ("daz" when Diffeomorphic's DazUrl is on the source object, else "blender").
+VXMOD_PROP = "vxmod"
+VXMOD_KIND_PROP = "vxmod_kind"
+VXMOD_SOURCE_PROP = "vxmod_source"
+VXMOD_KIND_BODY = "body"
+VXMOD_KIND_CLOTH = "cloth"
 ORIENTATION_BP = "BP"
 ORIENTATION_UE5 = "UE5"
 ORIENTATION_DAZ = "DAZ"
@@ -1878,6 +1894,14 @@ def export_to_unreal_v2(params) : #exportfolderpath,
     bpy.ops.object.duplicate(linked=False)
     vxasset = bpy.context.scene.objects.active
     vxasset.name = "vxasset"
+    # See the same strip in the base-res copy above.
+    if BODY_MARKER_PROP in vxasset:
+        del vxasset[BODY_MARKER_PROP]
+    # What Unreal is told about this export, stamped on every LOD below (FBX custom properties ->
+    # package metadata "FBX.mesh_LOD<n>.vxmod*", read by VersaMap's import hook): the converted body
+    # carries BODY_MARKER_PROP, anything else exported here is a garment.
+    vxmodKind = VXMOD_KIND_BODY if obj.get(BODY_MARKER_PROP) else VXMOD_KIND_CLOTH
+    vxmodSource = "daz" if obj.get("DazUrl") else "blender"
     if params.includeGeograftsOnExportUnreal:
         #deselect_all_objects()       
         #
@@ -2182,6 +2206,9 @@ def export_to_unreal_v2(params) : #exportfolderpath,
     #the order in which we set the parent is important it seems, otherwise in Unreal it will appear in the wrong order
     for i,lod in enumerate(LODs):
         lod.name="mesh_LOD{}".format(i)
+        lod[VXMOD_PROP] = __version__
+        lod[VXMOD_KIND_PROP] = vxmodKind
+        lod[VXMOD_SOURCE_PROP] = vxmodSource
         lod.parent = emptyLodGroup
         bpy.context.scene.update()	
         #print(o.name, o.type, o.data)

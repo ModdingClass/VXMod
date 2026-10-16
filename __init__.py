@@ -1523,11 +1523,23 @@ class CONVERT_OT_G3F_Body_Difeomorphic(bpy.types.Operator):
     ''''''
     bl_idname = "vxmod.convert_g3fdifeo_to_vxmodf"
     bl_label = ""
-    bl_description = "Convert a Difeomorphic G3F body into a VXMod body"    
+    bl_description = "Convert a Difeomorphic G3F body into a VXMod body"
     def execute(self, context):
-        obj_object = bpy.context.selected_objects[0] ####<--Fix
-        bpy.context.scene.objects.active = obj_object
-        print('Imported name: ', obj_object.name)
+        # Find the armature by DazRig rather than trusting the selection, which
+        # crashed with IndexError when nothing was selected.
+        source_armature, error = findDiffeomorphicArmature()
+        if error:
+            ShowMessageBox(error, "Error", 'ERROR')
+            return {'CANCELLED'}
+
+        # convertG3FDifeomorphicToVXModFBody reads the ACTIVE object, so make it so.
+        if bpy.context.mode != 'OBJECT':
+            bpy.ops.object.mode_set(mode='OBJECT')
+        bpy.ops.object.select_all(action='DESELECT')
+        source_armature.hide = False
+        source_armature.select = True
+        bpy.context.scene.objects.active = source_armature
+        print('Imported name: ', source_armature.name)
         convertG3FDifeomorphicToVXModFBody(
             context.scene.vxmod.materialConversionMode)
         return {'FINISHED'}
