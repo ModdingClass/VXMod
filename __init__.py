@@ -94,6 +94,7 @@ if "bpy" in locals():
     imp.reload(tools_message_box)
 
     imp.reload(diffeomorphic_merge_geografts)
+    imp.reload(hd_detail)
     imp.reload(exporter_unreal)
     imp.reload(importer_g3f)
     imp.reload(importer_g3f_morphs)
@@ -244,6 +245,8 @@ class VXMOD_vars(bpy.types.PropertyGroup) :
     exportShapekeys = bpy.props.BoolProperty(name="exportShapekeys", description="Export shapekeys for base and subdivided mesh (uncheck for exporting faster/DEBUG)",    default=True)
     cacheShapekeys = bpy.props.BoolProperty(name="cacheShapekeys", description="Cache subdivided shape key data to disk. Speeds up subsequent exports by skipping subdivision",    default=True)
     exportMorphBin = bpy.props.BoolProperty(name="exportMorphBin", description="Write shape keys to a sparse .vxmb side-car INSTEAD OF into the FBX. The exported FBX carries geometry only, so Unreal no longer pre-reads hundreds of blend shape channels; the VersaMap plugin injects the morphs after the import. Keep the .vxmb next to the .fbx",    default=False)
+    hdDetailOnLOD0 = bpy.props.BoolProperty(name="hdDetailOnLOD0", description="Add a Daz HD morph's level-1 detail to the subdivided LOD0 (mesh and every shape key). For a body that already HAS the character's shape: only the HD part is used, the morph's base deltas are not. Levels 2+ have no vertices and are skipped",    default=False)
+    hdDetailFile = bpy.props.StringProperty(name="hdDetailFile", description="The HD morph's .dsf (it names its .dhdm) or the .dhdm itself, inside the Daz library that holds Genesis3Female.dsf", default='', subtype='FILE_PATH')
     exportMorphBinNormals = bpy.props.BoolProperty(name="exportMorphBinNormals", description="Include per-vertex normal deltas in the .vxmb. Costs Blender one normals pass per shape key per LOD and roughly doubles the file, but Unreal then skips recomputing morph normals at build time. Leave OFF until the Unreal build step is measured to be the bottleneck",    default=False)
     #
     cleanupTempMeshesMode = bpy.props.EnumProperty(
@@ -652,6 +655,15 @@ class EXPORT_PT_VXModToUnreal(bpy.types.Panel):
 
         row_extra=extra_export_box.row(align=True)
         row_extra.prop(vxmod,'createSubdivMeshOnExportUnreal',text="Create Subdiv")
+        sub = extra_export_box.row(align=True)
+        sub.active = vxmod.createSubdivMeshOnExportUnreal
+        sub.separator()
+        sub.prop(vxmod,'hdDetailOnLOD0',text="HD Detail on LOD0")
+        if vxmod.hdDetailOnLOD0:
+            sub = extra_export_box.row(align=True)
+            sub.active = vxmod.createSubdivMeshOnExportUnreal
+            sub.separator()
+            sub.prop(vxmod,'hdDetailFile',text="")
         row_extra=extra_export_box.row(align=True)
         #row_extra.alignment = 'RIGHT'
         row_extra.prop(vxmod,'exportShapekeys',text="Export Shapekeys")

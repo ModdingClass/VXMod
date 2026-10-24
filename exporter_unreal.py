@@ -15,6 +15,7 @@ from .utils import *
 from .tools_message_box import *
 from .diffeomorphic_merge_geografts import geograft_data_available, merge_geografts_into_active
 from .exporter_morph_bin import export_morph_bin, MORPH_BIN_SUFFIX, NUMPY_IMPORT_ERROR
+from . import hd_detail
 
 from . import fbody_stats
 from ._version import __version__
@@ -1780,12 +1781,103 @@ def check_export_dependencies(params):
     return True
 
 
+def resolve_hd_detail(params):
+    """'HD Detail on LOD0': find the .dhdm and the figure file BEFORE the export starts.
+
+    Returns (dhdm path, figure .dsf path, morph name), None when the option is off, or False
+    after showing the error (the export must stop)."""
+    if not getattr(params, 'hdDetailOnLOD0', False):
+        return None
+    def fail(msg):
+        ShowMessageBox(msg, "HD Detail", 'ERROR')
+        print("[VXMod] ABORTED: " + msg)
+        return False
+    if not params.createSubdivMeshOnExportUnreal:
+        return fail("'HD Detail on LOD0' needs 'Create Subdiv': the detail lives on the subdivided LOD0")
+    path = bpy.path.abspath(params.hdDetailFile)
+    if not path or not os.path.isfile(path):
+        return fail("HD Detail: pick the HD morph's .dsf (or its .dhdm). Not found: '{}'".format(path))
+    try:
+        dhdm, figure, name = hd_detail.resolve_hd_files(path)
+    except (IOError, OSError, ValueError) as e:
+        return fail("HD Detail: {}".format(e))
+    figure = hd_detail.find_figure(dhdm, figure)
+    if figure is None:
+        return fail("HD Detail: Genesis3Female.dsf not found in the library that holds {}".format(dhdm))
+    return dhdm, figure, name
+
+
+def apply_hd_detail_to_lod0(hd_files, vxasset, vxasset_hires, mapping_path):
+    """Add the HD morph's level-1 detail to the subdivided LOD0 (mesh and every shape key).
+
+    The body already has the character's shape, so only the HD part is used: frames come from
+    the body's own base positions (vxasset), the morph's .dsf deltas are not applied. Every shape
+    key gets the same offsets, so the morph deltas (FBX blend shapes, .vxmb) do not change.
+    Levels 2+ have no vertices on LOD0 and are skipped (VXMod bakes them into normal maps).
+
+    The math is Docs/VersaDazHDMorphs.md (VXMod UE project), verified here against Daz's own
+    subdivision-1 export of FHMMelisande: max 0.0007 mm."""
+    dhdm, figure, name = hd_files
+    faces, n_figure = hd_detail.figure_faces(figure)
+    records, counts = hd_detail.read_dhdm(dhdm)
+    base = vxasset.data
+    n_base = len(base.vertices)
+    if n_base < n_figure:
+        ShowMessageBox("HD Detail: the body has {} vertices, the figure {}".format(n_base, n_figure), "HD Detail", 'ERROR')
+        return False
+    present = hd_detail.check_faces(faces, (tuple(p.vertices) for p in base.polygons))
+    if present < 0.9 * len(faces):
+        ShowMessageBox("HD Detail: only {} of the figure's {} faces are on the body - not in Daz vertex order? "
+                       "LOD0 exported without HD".format(present, len(faces)), "HD Detail", 'ERROR')
+        return False
+    flat = [0.0] * (n_base * 3)
+    base.vertices.foreach_get("co", flat)
+    positions = [(flat[i], flat[i + 1], flat[i + 2]) for i in range(0, len(flat), 3)]
+    unit = hd_detail.unit_from_edges(faces, hd_detail.figure_positions(figure), positions)
+    offsets, _ = hd_detail.level1_offsets(records, faces, positions, unit)
+    #
+    with open(mapping_path, 'r') as json_file:
+        mapping_list = json.load(json_file)
+    lookup = {tuple(sorted(e["base_indices"])): e["index"] for e in mapping_list}
+    hires = vxasset_hires.data
+    n_hires = len(hires.vertices)
+    deltas = [0.0] * (n_hires * 3)
+    hit, skipped, biggest = 0, 0, 0.0
+    for key, d in offsets.items():
+        i = lookup.get(key)
+        if i is None or i >= n_hires:
+            skipped += 1
+            continue
+        deltas[i * 3], deltas[i * 3 + 1], deltas[i * 3 + 2] = d
+        hit += 1
+        biggest = max(biggest, math.sqrt(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]))
+    #
+    def add_to(collection):
+        cos = [0.0] * (n_hires * 3)
+        collection.foreach_get("co", cos)
+        collection.foreach_set("co", [c + d for c, d in zip(cos, deltas)])
+    add_to(hires.vertices)
+    if hires.shape_keys:
+        for kb in hires.shape_keys.key_blocks:
+            add_to(kb.data)
+    hires.update()
+    higher = sorted(l for l in counts if l > 1)
+    print("[VXMod] HD Detail '{}': level 1 on {} LOD0 vertices (max {:.3f} mm, 1 cm = {:.5f} units), "
+          "{} skipped (no LOD0 vertex: faces missing on the body){}".format(
+          name, hit, biggest / unit * 10.0, unit, skipped,
+          "; levels {} not used (no vertices for them)".format(higher) if higher else ""))
+    return True
+
+
 def export_to_unreal_v2(params) : #exportfolderpath,
     #exportfolderpath,exportFilename, includeGeograftsOnExportUnreal, cleanTempMeshesAfterExportUnreal, reorientBonesOnExportUnreal
     #
     # Before anything is touched, and before the selection checks - a missing addon is not
     # something the user can fix by picking a different object.
     if not check_export_dependencies(params):
+        return None
+    hd_files = resolve_hd_detail(params)
+    if hd_files is False:
         return None
 
     obj = bpy.context.active_object
@@ -1885,8 +1977,11 @@ def export_to_unreal_v2(params) : #exportfolderpath,
     if (params.createSubdivMeshOnExportUnreal):    
         file_path = os.path.join(exportfolderpath,mergedMeshesName+"_matching_index_dict.json")
         if os.path.isfile(file_path) == False:
-            ShowMessageBox("Missing subdiv matching file: {}_matching_index_dict.json, maybe try to build it first? ".format(mergedMeshesName), "Error", 'ERROR')    
-            return None       
+            ShowMessageBox("Missing subdiv matching file: {}_matching_index_dict.json, maybe try to build it first? ".format(mergedMeshesName), "Error", 'ERROR')
+            return None
+        if hd_files and not os.path.isfile(os.path.join(exportfolderpath, mergedMeshesName + "_vertex_mapping_list.json")):
+            ShowMessageBox("HD Detail: missing subdiv matching file {}_vertex_mapping_list.json, maybe try to build it first?".format(mergedMeshesName), "Error", 'ERROR')
+            return None
     print("$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$")
     deselect_all_objects()
     obj.select = True
@@ -2079,6 +2174,12 @@ def export_to_unreal_v2(params) : #exportfolderpath,
                     # Save cache for next export
                     if params.cacheShapekeys:
                         save_shapekey_subdiv_cache(cache_path, vxasset_hires, sk_names, fingerprint)
+        #
+        # After the shape keys and their cache: the cache stays HD-free, so changing the HD file
+        # never needs a re-subdivision.
+        if hd_files:
+            mapping_path = os.path.join(exportfolderpath, mergedMeshesName + "_vertex_mapping_list.json")
+            apply_hd_detail_to_lod0(hd_files, vxasset, vxasset_hires, mapping_path)
         #
         print("vxasset_chupacabra_morph (all) created!")
         # why do we need this actually?!?
