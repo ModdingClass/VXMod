@@ -1425,7 +1425,7 @@ def sortLegacyMaterialSlots(ob):
             bpy.ops.object.material_slot_move(direction='DOWN')
 
 
-def convertG3FDifeomorphicToVXModFBody(material_mode='SPLITBODY') :
+def convertG3FDifeomorphicToVXModFBody(material_mode='DAZSPLIT') :
     isMyArmature = checkIfActiveObjectIs("ARMATURE","Genesis 3 Female")
     if (isMyArmature):
         pass

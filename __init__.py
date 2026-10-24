@@ -324,7 +324,7 @@ class VXMOD_vars(bpy.types.PropertyGroup) :
              "geograft gets mat_gens and the censor region mat_censor, as in "
              "SplitBody. Nothing is sent to DONT_RENDER"),
         ],
-        default='SPLITBODY',
+        default='DAZSPLIT',
     )
     pectoralWeightModeL = bpy.props.EnumProperty(
         name="L",

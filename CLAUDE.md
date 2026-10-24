@@ -264,12 +264,12 @@ extracted functions; **none of it has been run in Blender yet.**
 
 ## Material conversion modes (`G3F→VX body`)
 
-`convertG3FDifeomorphicToVXModFBody(material_mode='SPLITBODY')` in
+`convertG3FDifeomorphicToVXModFBody(material_mode='DAZSPLIT')` in
 `g3f/importer_g3f_difeomorphic.py`. The mode comes from `vxmod.materialConversionMode`,
 an `EnumProperty` rendered `expand=True` under the label **"Convert Materials
 Pipeline:"**, directly beneath the `G3F→VX body` button in step 1 of the panel.
 
-`SPLITBODY` is the default in **both** places — the property and the function signature
+`DAZSPLIT` is the default in **both** places — the property and the function signature
 — so "the default" means one thing. `LEGACY` is still the fallback for an *unrecognised*
 mode string, which is a separate concern from being the default.
 
@@ -279,6 +279,10 @@ that assumed a converted body carries `mat_fullbody` now needs to say which mode
 means.
 
 Like the pectoral options, this is a **build option** — changing it after a conversion
+The default moved again, from `SPLITBODY` to `DAZSPLIT`, on 2026-10-23: it is the mode the
+game's bodies use now (SKM_BelaTest / SKM_Natia slots: mat_eyes, mat_cornea, mat_fingernails...).
+A saved .blend keeps the mode its scene last had - the default only applies where it was never set.
+
 does nothing until the next run.
 
 | Mode | What it does |
@@ -286,8 +290,8 @@ does nothing until the next run.
 | `DAZ` | Nothing. Stock Daz surfaces stay exactly as imported. They are still **copied** first (that step is shared), so the originals on the Difeomorphic body are never touched. |
 | `LEGACY` | The original conversion, unchanged — collapse onto the 21 `body_*` names, pad the table, sort slots into legacy engine index order. |
 | `FULLBODY` | Everything onto `mat_fullbody`, with two exceptions. |
-| `SPLITBODY` | One material per body REGION, plus own slots for the graft and censor. Nine slots. **Default.** |
-| `DAZSPLIT` | One slot per Daz SURFACE, renamed `mat_` + lowercased Daz name (`Face-1.001` → `mat_face`), except the merges in `DAZSPLIT_SURFACE_MERGES`: Face + Ears + EyeSocket + Lips → `mat_face`, Mouth + Teeth → `mat_mouth`, Sclera + Irises + Pupils → `mat_eyes`, Cornea + EyeMoisture → `mat_cornea`. The surviving material is the one whose own Daz name is the target (Face, Mouth, Cornea); `mat_eyes` has no such surface, so it keeps the first eye slot's. Eye groupings match `ShadersForDaz3dAssets` in the UE project: `MI_Iris`/`MI_Pupils`/`MI_Sclera` all parent `M_EyesSimple`, `MI_Cornea`/`MI_EyeMoisture` both parent `M_Invisible`. The copied Daz material is renamed in place, so its settings survive; if the name is taken the existing datablock is reused instead of getting `.001`. Graft → `mat_gens`, censor → `mat_censor` as in SPLITBODY. **Nothing goes to `DONT_RENDER`** (eye interior stays visible as `mat_eyes` / `mat_cornea`). Table: `DAZSPLIT_MATERIAL_NAMES`. |
+| `SPLITBODY` | One material per body REGION, plus own slots for the graft and censor. Nine slots. |
+| `DAZSPLIT` | **Default** (since 2026-10-23). One slot per Daz SURFACE, renamed `mat_` + lowercased Daz name (`Face-1.001` → `mat_face`), except the merges in `DAZSPLIT_SURFACE_MERGES`: Face + Ears + EyeSocket + Lips → `mat_face`, Mouth + Teeth → `mat_mouth`, Sclera + Irises + Pupils → `mat_eyes`, Cornea + EyeMoisture → `mat_cornea`. The surviving material is the one whose own Daz name is the target (Face, Mouth, Cornea); `mat_eyes` has no such surface, so it keeps the first eye slot's. Eye groupings match `ShadersForDaz3dAssets` in the UE project: `MI_Iris`/`MI_Pupils`/`MI_Sclera` all parent `M_EyesSimple`, `MI_Cornea`/`MI_EyeMoisture` both parent `M_Invisible`. The copied Daz material is renamed in place, so its settings survive; if the name is taken the existing datablock is reused instead of getting `.001`. Graft → `mat_gens`, censor → `mat_censor` as in SPLITBODY. **Nothing goes to `DONT_RENDER`** (eye interior stays visible as `mat_eyes` / `mat_cornea`). Table: `DAZSPLIT_MATERIAL_NAMES`. |
 
 ### FullBody exceptions
 
