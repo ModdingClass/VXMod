@@ -59,6 +59,7 @@ from .tools_duplicate_object_remove_mats_shapekeys import *
 from .tools_fix_eye_morphs import *
 from .tools_fix_eyelashes import *
 from .tools_fix_eye_moisture import *
+from .tools_heel_pose import *
 from .helper_vgroups import *
 from .g3f.importer_g3f_difeomorphic import *
 from .g3f.difeomorphic_workflow import *
@@ -247,6 +248,7 @@ class VXMOD_vars(bpy.types.PropertyGroup) :
     exportMorphBin = bpy.props.BoolProperty(name="exportMorphBin", description="Write shape keys to a sparse .vxmb side-car INSTEAD OF into the FBX. The exported FBX carries geometry only, so Unreal no longer pre-reads hundreds of blend shape channels; the VersaMap plugin injects the morphs after the import. Keep the .vxmb next to the .fbx",    default=False)
     hdDetailOnLOD0 = bpy.props.BoolProperty(name="hdDetailOnLOD0", description="Add a Daz HD morph's level-1 detail to the subdivided LOD0 (mesh and every shape key). For a body that already HAS the character's shape: only the HD part is used, the morph's base deltas are not. Levels 2+ have no vertices and are skipped",    default=False)
     hdDetailFile = bpy.props.StringProperty(name="hdDetailFile", description="The HD morph's .dsf (it names its .dhdm) or the .dhdm itself, inside the Daz library that holds Genesis3Female.dsf", default='', subtype='FILE_PATH')
+    heelPoseJsonFile = bpy.props.StringProperty(name="heelPoseJsonFile", description="Edit bones JSON of the armature Manny FULL built on the figure WEARING the shoes (Armature_HH.json, in the shoe's folder). Load heel pose makes it a Pose Library pose on Armature, named HH_<that folder>", default='', subtype='FILE_PATH')
     exportMorphBinNormals = bpy.props.BoolProperty(name="exportMorphBinNormals", description="Include per-vertex normal deltas in the .vxmb. Costs Blender one normals pass per shape key per LOD and roughly doubles the file, but Unreal then skips recomputing morph normals at build time. Leave OFF until the Unreal build step is measured to be the bottleneck",    default=False)
     #
     cleanupTempMeshesMode = bpy.props.EnumProperty(
@@ -474,6 +476,16 @@ class VXMOD_CONVERTER_OT_PanelDifeomorphicToVXMod(bpy.types.Panel):
         row.operator('vxmod.check_ue5_compatibility',
                      text='Check UE5 compatibility', icon='ZOOM_ALL')
 
+        # --- Step 3: a shoe's heel pose, from the armature Manny FULL built on the figure in the
+        #     shoes. Becomes a Pose Library pose on Armature; the shoe mesh exports it (Unreal Exporter).
+        heel_box = layout.box()
+        heel_box.label(text="3. High heel pose", icon='POSE_DATA')
+        heel_box.label(text="Armature_HH.json (Manny FULL in the shoes):")
+        heel_box.prop(vxmod, 'heelPoseJsonFile', text="")
+        row = heel_box.row(align=True)
+        row.enabled = manny_armature is not None and manny_armature.type == 'ARMATURE'
+        row.operator('vxmod.load_heel_pose', text='Load heel pose', icon='POSE_DATA')
+
         # --- The original VXMod skeleton. Kept working and deliberately untouched, but
         #     it targets a different skeleton than the Manny path - do not mix the two.
         legacy_box = layout.box()
@@ -635,6 +647,17 @@ class EXPORT_PT_VXModToUnreal(bpy.types.Panel):
         else:
             export_label = "Export bugged"
         row.operator('vxmod.export_skeletalmesh_unreal',text=export_label, icon='TIME')
+        # A garment's heel pose: exported as vxmod_heel_pose (tools_heel_pose.py). Bodies have none.
+        if obj and obj.type == 'MESH' and not obj.get(BODY_MARKER_PROP):
+            heel_armature = next((mod.object for mod in obj.modifiers
+                                  if mod.type == 'ARMATURE' and mod.object is not None), None)
+            row = box.row(align=True)
+            if heel_armature is not None and heel_armature.pose_library is not None:
+                row.prop_search(obj, "vx_heel_pose", heel_armature.pose_library, "pose_markers",
+                                text="Heel pose", icon='POSE_DATA')
+            else:
+                row.enabled = False
+                row.label(text="Heel pose: none loaded (3. High heel pose)", icon='POSE_DATA')
         row=box.row(align=True)
         row.operator('export.vxmod_animation_to_unreal', text="Export ANIM_" + vxmod.exportable_mesh, icon='RENDER_ANIMATION')
         row=box.row()
@@ -1098,6 +1121,46 @@ class EXPORT_OT_VXModBodyToUnreal(bpy.types.Operator):
             return {'FINISHED'}        
         return {'FINISHED'}
 
+
+
+class POSE_OT_load_heel_pose(bpy.types.Operator):
+    ''''''
+    bl_idname = "vxmod.load_heel_pose"
+    bl_label = "Load heel pose"
+    bl_description = "Pose Armature like the heeled armature in the JSON (every bone that moved: feet, balls, toes, pelvis lift) and store it in Armature's Pose Library as HH_<shoe folder>, replacing a pose of that name. Armature goes back to its rest pose. The exportable mesh gets it as its heel pose if it is a garment on Armature"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    def execute(self, context):
+        vxmod = context.scene.vxmod
+        armature_object = bpy.data.objects.get("Armature")
+        if armature_object is None or armature_object.type != 'ARMATURE':
+            self.report({'ERROR'}, "No Manny armature named 'Armature' - run Manny FULL first.")
+            return {'CANCELLED'}
+        path = bpy.path.abspath(vxmod.heelPoseJsonFile)
+        if not os.path.isfile(path):
+            self.report({'ERROR'}, "Pick the heeled armature's JSON first (Armature_HH.json).")
+            return {'CANCELLED'}
+        pose_name = heelPoseNameForJson(path)
+        armature_object.hide = False
+        posed = loadHeelPoseFromJson(armature_object, path, pose_name)
+        if not posed:
+            self.report({'WARNING'}, "No bone of Armature differs from {} - nothing stored.".format(os.path.basename(path)))
+            return {'CANCELLED'}
+        print("Load heel pose: '{}' from {}, {} bone(s):".format(pose_name, path, len(posed)))
+        for name, matrix_basis in posed:
+            loc, rot, _ = matrix_basis.decompose()
+            e = rot.to_euler('XYZ')
+            print("  {:<24} rot XYZ {:8.3f} {:8.3f} {:8.3f}   loc {:8.5f} {:8.5f} {:8.5f}".format(
+                name, math.degrees(e.x), math.degrees(e.y), math.degrees(e.z), loc.x, loc.y, loc.z))
+        message = "Heel pose '{}': {} bones in Armature's Pose Library".format(pose_name, len(posed))
+        shoe = bpy.data.objects.get(vxmod.exportable_mesh)
+        if (shoe is not None and shoe.type == 'MESH' and not shoe.get(BODY_MARKER_PROP)
+                and any(mod.type == 'ARMATURE' and mod.object == armature_object for mod in shoe.modifiers)):
+            shoe.vx_heel_pose = pose_name
+            message += ", set as the heel pose of " + shoe.name
+        print(message)
+        self.report({'INFO'}, message)
+        return {'FINISHED'}
 
 
 class EXPORT_OT_VXModAnimationToUnreal(bpy.types.Operator):
@@ -2059,8 +2122,14 @@ def register() :
     #Internally Blender collects subclasses on registrable types, storing them by the module in which they are defined. By passing the module name to bpy.utils.register_module Blender can register all classes created by this module and its submodules.
     bpy.utils.register_module(__name__)
     #bpy.types.PoseBone.hfg_bone=bpy.props.PointerProperty(type=hfg_bone_collection)
-    bpy.types.Scene.vxmod = bpy.props.PointerProperty(type=VXMOD_vars)    
-    vxmod = bpy.types.Scene.vxmod    
+    bpy.types.Scene.vxmod = bpy.props.PointerProperty(type=VXMOD_vars)
+    vxmod = bpy.types.Scene.vxmod
+    # On a garment: the Pose Library pose that is its heel pose (tools_heel_pose.HEEL_POSE_PROP).
+    bpy.types.Object.vx_heel_pose = bpy.props.StringProperty(
+        name="Heel pose",
+        description="The Pose Library pose this shoe is modelled in. Export stamps its Unreal numbers "
+                    "(Versa Heel Data: bone overrides + pelvis lift) on the FBX as vxmod_heel_pose",
+        default='')
     #bpy.app.handlers.scene_update_post.append(addon_handler)
     register_handlers()
 
@@ -2068,6 +2137,7 @@ def unregister() :
     global custom_icons
     bpy.utils.previews.remove(custom_icons)
     del bpy.types.Scene.vxmod
+    del bpy.types.Object.vx_heel_pose
     #del bpy.types.PoseBone.hfg_bone
     if update_active_mesh in bpy.app.handlers.scene_update_post:
         bpy.app.handlers.scene_update_post.remove(update_active_mesh)

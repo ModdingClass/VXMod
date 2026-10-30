@@ -16,6 +16,7 @@ from .tools_message_box import *
 from .diffeomorphic_merge_geografts import geograft_data_available, merge_geografts_into_active
 from .exporter_morph_bin import export_morph_bin, MORPH_BIN_SUFFIX, NUMPY_IMPORT_ERROR
 from . import hd_detail
+from .tools_heel_pose import heelPoseMetadata, HEEL_POSE_PROP, VXMOD_HEEL_POSE_PROP
 
 from . import fbody_stats
 from ._version import __version__
@@ -2233,6 +2234,14 @@ def export_to_unreal_v2(params) : #exportfolderpath,
     if params.reorientBonesOnExportUnreal:
         orient_bones_for_unreal(armature_clone, armature_object)
     #
+    # The garment's heel pose, in the bones' EXPORT frames: here, before any transform apply or
+    # rename, the clone still shares the source armature's space and bone names (tools_heel_pose.py).
+    heelPoseJson = None
+    if vxmodKind == VXMOD_KIND_CLOTH:
+        heelPoseJson = heelPoseMetadata(obj, armature_object, armature_clone)
+    elif obj.get(HEEL_POSE_PROP):
+        print("heel pose: '{}' is a body - its heel pose is not exported".format(obj.name))
+    #
     #if True==True:
     #    return
     #
@@ -2310,6 +2319,19 @@ def export_to_unreal_v2(params) : #exportfolderpath,
         lod[VXMOD_PROP] = __version__
         lod[VXMOD_KIND_PROP] = vxmodKind
         lod[VXMOD_SOURCE_PROP] = vxmodSource
+        if HEEL_POSE_PROP in lod:
+            del lod[HEEL_POSE_PROP]
+        if heelPoseJson:
+            lod[VXMOD_HEEL_POSE_PROP] = heelPoseJson
+            # The shoe comes from the Daz scene WEARING it, where the whole figure stands PelvisLift higher.
+            # Unreal models shoes unlifted (UHHSkeletalMeshComponent leaves PelvisLift to the body, and the
+            # shoe rides on the lifted body), so the lift comes out of the export copy here. LOD coordinates
+            # are cm by now (scale 100 applied, rotation applied), same as PelvisLift.
+            lift = json.loads(heelPoseJson).get("PelvisLift", 0.0)
+            if lift:
+                lod.data.transform(Matrix.Translation((0.0, 0.0, -lift)), shape_keys=True)
+                print("heel pose: {} lowered {:.3f} cm (PelvisLift - modelled in the lifted Daz pose)"
+                      .format(lod.name, lift))
         lod.parent = emptyLodGroup
         bpy.context.scene.update()	
         #print(o.name, o.type, o.data)
