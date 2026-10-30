@@ -778,7 +778,7 @@ class MESH_OT_fix_eye_morphs(bpy.types.Operator):
     ''''''
     bl_idname = "vxmod.fix_eye_morphs"
     bl_label = "Fix eye morphs"
-    bl_description = "Take the eyeballs (mat_eyes, mat_cornea) out of the 8 eyeLook shape keys, keep the lids. The eye bone does the turning in Unreal"
+    bl_description = "Take the eyeballs (mat_eyes, mat_cornea) out of the 8 eyeLook shape keys, keep the lids and the eye moisture tubes on them. The eye bone does the turning in Unreal"
     bl_options = {'REGISTER', 'UNDO'}
 
     def execute(self, context):
