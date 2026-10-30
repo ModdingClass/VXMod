@@ -59,6 +59,7 @@ from .tools_duplicate_object_remove_mats_shapekeys import *
 from .tools_fix_eye_morphs import *
 from .tools_fix_eyelashes import *
 from .tools_fix_eye_moisture import *
+from .tools_fix_spine_roll import *
 from .tools_heel_pose import *
 from .helper_vgroups import *
 from .g3f.importer_g3f_difeomorphic import *
@@ -582,7 +583,7 @@ class OtherFixesPanel(bpy.types.Panel):
         row.operator('vxmod.fix_eye_moisture',text='Fix eye moisture',icon='MOD_FLUIDSIM')
         row=box.row(align=True)
         row.operator('vxmod.fix_eyeball_moisture',text='Fix eyeball moisture',icon='MATSPHERE')
-        row.operator('vxmod.fake',text='              ')
+        row.operator('vxmod.fix_spine_midline',text='Centre spine',icon='BONE_DATA')
         row.operator('vxmod.fake',text='              ')
         row=box.row(align=True)
         row.operator('vxmod.fake',text='              ')

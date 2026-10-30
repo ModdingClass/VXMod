@@ -1330,6 +1330,160 @@ def reaim_feet_for_unreal(armature_clone):
     return done
 
 
+# Blender keeps an edit bone as head, tail and roll, and rebuilds its frame from
+# them (vec_roll_to_mat3) in 32-bit floats through a 1 / (1 + y) term, y being
+# the bone direction's world Y. Near -Y that term amplifies float rounding and
+# the frame comes back turned about the bone. upperarm_r, 0.47 deg from -Y,
+# reached Unreal 0.218 deg rolled (2026-10-30) although the add-on had computed
+# its frame exactly - and the FBX writer reads the same rebuilt frame. Later
+# Blenders reworked that formula; 2.79b has the old one.
+# A bone whose frame matters to the degree records its intended WORLD frame on
+# itself (BONE_FRAME_PROP, 9 floats, rows); _fit_roll then turns its roll until
+# Blender's rebuilt frame matches, and check_bone_frames repeats that right
+# before the FBX write, because the transform applies in between rebuild the
+# rolls again.
+BONE_FRAME_PROP = "vxmod_frame"
+ROLL_FIT_DEGREES = 0.001
+FRAME_REPORT_DEGREES = 0.01
+
+
+def _rows(matrix3):
+    return [[float(matrix3[r][c]) for c in range(3)] for r in range(3)]
+
+
+def _rotation_3x3(matrix4):
+    """The rotation part of an object or bone matrix, columns normalized (scale out)."""
+    m = matrix4.to_3x3()
+    columns = [Vector((m[0][c], m[1][c], m[2][c])).normalized() for c in range(3)]
+    return Matrix(columns).transposed()
+
+
+def _angle_rows(a, b):
+    """Angle in degrees between two 3x3 frames given as row lists, in Python doubles.
+    atan2 of the skew part, not acos of the trace: exact for tiny angles."""
+    r = [[sum(a[k][i] * b[k][j] for k in range(3)) for j in range(3)] for i in range(3)]
+    s = math.sqrt((r[2][1] - r[1][2]) ** 2 + (r[0][2] - r[2][0]) ** 2
+                  + (r[1][0] - r[0][1]) ** 2) * 0.5
+    c = (r[0][0] + r[1][1] + r[2][2] - 1.0) * 0.5
+    return degrees(math.atan2(s, c))
+
+
+def _exact_bone_frame(head, tail, roll):
+    """Blender's vec_roll_to_mat3 in double precision, stable near -Y. Rows.
+
+    The same frame Blender means to build from head, tail and roll, with 1 + y
+    taken as (x^2 + z^2) / (1 - y) on the -Y side so nothing cancels."""
+    d = [float(tail[i]) - float(head[i]) for i in range(3)]
+    length = math.sqrt(sum(v * v for v in d))
+    x, y, z = (v / length for v in d)
+    theta = (x * x + z * z) / (1.0 - y) if y < 0.0 else 1.0 + y
+    if theta < 1e-300:
+        b = [[-1.0, 0.0, 0.0], [0.0, -1.0, 0.0], [0.0, 0.0, 1.0]]
+    else:
+        # Columns (1 - x^2/t, -x, -xz/t), (x, y, z), (-xz/t, -z, 1 - z^2/t).
+        b = [[1.0 - x * x / theta, x, -x * z / theta],
+             [-x, y, -z],
+             [-x * z / theta, z, 1.0 - z * z / theta]]
+    c, s = math.cos(roll), math.sin(roll)
+    t = 1.0 - c
+    r = [[c + x * x * t, x * y * t - z * s, x * z * t + y * s],
+         [y * x * t + z * s, c + y * y * t, y * z * t - x * s],
+         [z * x * t - y * s, z * y * t + x * s, c + z * z * t]]
+    return [[sum(r[i][k] * b[k][j] for k in range(3)) for j in range(3)] for i in range(3)]
+
+
+def _roll_error(ebone, target, world3):
+    """(about-the-bone error in radians, full error in degrees) of the frame Blender
+    rebuilds for ebone, against target (world rows)."""
+    built = _rows(world3 * ebone.matrix.to_3x3())
+    m = [[sum(target[k][i] * built[k][j] for k in range(3)) for j in range(3)]
+         for i in range(3)]
+    # Bone axis = local Y: m = Ry(e) when only the roll is off.
+    return math.atan2(m[0][2] - m[2][0], m[0][0] + m[2][2]), _angle_rows(target, built)
+
+
+def _fit_roll(ebone, target, world3, max_steps=8):
+    """Turn ebone's roll until Blender's rebuilt frame matches target (world rows).
+    Edit mode. Returns (degrees off before, degrees off after)."""
+    error, before = _roll_error(ebone, target, world3)
+    sign = 1.0
+    for _ in range(max_steps):
+        if abs(degrees(error)) < ROLL_FIT_DEGREES:
+            break
+        ebone.roll -= sign * error
+        new_error, _ = _roll_error(ebone, target, world3)
+        if abs(new_error) > abs(error):
+            ebone.roll += 2.0 * sign * error
+            sign = -sign
+            new_error, _ = _roll_error(ebone, target, world3)
+        error = new_error
+    return before, _roll_error(ebone, target, world3)[1]
+
+
+def _set_bone_frame(ebone, matrix, world3):
+    """Set an edit bone's frame, record it as intended (BONE_FRAME_PROP) and fit the
+    roll so Blender's rebuilt frame is that one. Returns (before, after) degrees."""
+    ebone.matrix = matrix
+    target = _rows(world3 * matrix.to_3x3())
+    ebone[BONE_FRAME_PROP] = [v for row in target for v in row]
+    return _fit_roll(ebone, target, world3)
+
+
+def check_bone_frames(armature_clone, report_degrees=FRAME_REPORT_DEGREES):
+    """Report every bone's frame as Blender will hand it to the FBX writer, and fit
+    the roll of each bone that recorded an intended frame (BONE_FRAME_PROP).
+
+    Call it immediately before the FBX write, after every transform apply and the
+    bone rebuild (those rebuild the rolls). Two parts:
+      * every bone: Blender's float frame against the exact frame of the same
+        head, tail and roll (_exact_bone_frame) - the precision lost, with the
+        bone's angle to -Y next to it;
+      * recorded bones: fitted to their intended frame, then read back from
+        data.bones (what the FBX writer reads) - those numbers are the export.
+    The record is removed afterwards (use_custom_props would export it)."""
+    _enter_edit_on(armature_clone)
+    world3 = _rotation_3x3(armature_clone.matrix_world)
+    losses = []
+    targets = {}
+    for eb in armature_clone.data.edit_bones:
+        if eb.length < 1e-9:
+            continue
+        exact = _exact_bone_frame(eb.head, eb.tail, eb.roll)
+        built = _rows(eb.matrix.to_3x3())
+        direction = (eb.tail - eb.head).normalized()
+        to_neg_y = degrees(math.acos(max(-1.0, min(1.0, -direction.y))))
+        losses.append((_angle_rows(exact, built), eb.name, to_neg_y))
+        if BONE_FRAME_PROP in eb:
+            flat = list(eb[BONE_FRAME_PROP])
+            targets[eb.name] = [flat[0:3], flat[3:6], flat[6:9]]
+            _fit_roll(eb, targets[eb.name], world3)
+            del eb[BONE_FRAME_PROP]
+    bpy.ops.object.mode_set(mode='OBJECT')
+
+    losses.sort(reverse=True)
+    over = [entry for entry in losses if entry[0] >= report_degrees]
+    print("  bone frames: {} bones, Blender's float frame vs the exact one "
+          "(same head / tail / roll){}".format(
+              len(losses), "" if over else ": all under {} deg".format(report_degrees)))
+    for loss, name, to_neg_y in (over or losses[:5]):
+        print("      {:<28} {:8.4f} deg   ({:6.2f} deg from -Y{})".format(
+            name, loss, to_neg_y, ", fitted below" if name in targets else ""))
+
+    if targets:
+        world3 = _rotation_3x3(armature_clone.matrix_world)
+        exported = []
+        for name, target in targets.items():
+            bone = armature_clone.data.bones[name]
+            built = _rows(world3 * _rotation_3x3(bone.matrix_local))
+            exported.append((_angle_rows(target, built), name))
+        exported.sort(reverse=True)
+        print("  bone frames: {} bones fitted to their intended frame, worst after "
+              "the fit (as exported):".format(len(exported)))
+        for off, name in exported:
+            print("      {:<28} {:8.4f} deg".format(name, off))
+    return losses, targets
+
+
 # (upper, lower, effector) per limb. The effector (foot / hand) is never touched.
 IK_LIMB_CHAINS = (('thigh', 'calf', 'foot'), ('upperarm', 'lowerarm', 'hand'))
 
@@ -1361,6 +1515,10 @@ def align_limbs_for_ik(armature_clone):
         frames  X exactly to the next joint (sign kept), Z = the hinge, Y = Z x X
         twists  back on their parent's line at their dict_bones fractions, the
                 parent's new frame times their old frame relative to it
+        roll    every frame set through _set_bone_frame: recorded as intended and
+                its roll fitted until Blender's rebuilt frame is that one (near -Y
+                Blender's own rebuild lost 0.22 deg on upperarm_r);
+                check_bone_frames fits again right before the FBX write
     Foot and hand keep their world frames (the shoes' heel data is in foot space).
 
     Runs after apply_ue5_roll_correction: the frames are absolute, like the foot
@@ -1374,6 +1532,7 @@ def align_limbs_for_ik(armature_clone):
 
     _enter_edit_on(armature_clone)
     ebones = armature_clone.data.edit_bones
+    world3 = _rotation_3x3(armature_clone.matrix_world)
 
     done = []
     for side in ('.L', '.R'):
@@ -1419,9 +1578,10 @@ def align_limbs_for_ik(armature_clone):
                                (0.0, 0.0, 0.0, 1.0)))
 
             turned = []
+            fits = []
             for bone, head, target in ((upper, root, joint), (lower, joint, effector)):
                 new_matrix = frame(old[bone.name], head, target)
-                bone.matrix = new_matrix
+                fits.append((bone.name, _set_bone_frame(bone, new_matrix, world3)))
                 turned.append(degrees(old[bone.name].to_quaternion().rotation_difference(
                     new_matrix.to_quaternion()).angle))
                 # Twists: back on the new line, same frame relative to the parent.
@@ -1434,14 +1594,84 @@ def align_limbs_for_ik(armature_clone):
                     relative = old[bone.name].inverted() * old[twist.name]
                     twist_matrix = new_matrix * relative
                     twist_matrix.translation = head + x * (span * fraction)
-                    twist.matrix = twist_matrix
-            done.append("{}{}: joint moved {:.4f}, frames turned {:.2f} / {:.2f} deg"
-                        .format(upper_base, side, abs(moved), turned[0], turned[1]))
+                    fits.append((twist.name, _set_bone_frame(twist, twist_matrix, world3)))
+            worst_name, (worst_before, worst_after) = max(fits, key=lambda f: f[1][0])
+            done.append("{}{}: joint moved {:.4f}, frames turned {:.2f} / {:.2f} deg; "
+                        "read back worst {} {:.4f} deg, after roll fit {:.4f}"
+                        .format(upper_base, side, abs(moved), turned[0], turned[1],
+                                worst_name, worst_before,
+                                max(after for _, (_, after) in fits)))
 
     bpy.ops.object.mode_set(mode='OBJECT')
     print("  limb IK align (armature units):")
     for entry in done:
         print("      " + entry)
+    return done
+
+
+# A source roll this close to 0 (radians) counts as zeroed (Other Fixes > Centre spine).
+ZERO_ROLL_RADIANS = 1e-7
+
+
+def zero_roll_midline_frames(armature_clone):
+    """The final UE5 frames of the midline bones whose source roll is 0, in doubles.
+
+    Call BEFORE the conversion. A zero roll means the frame is exactly the one
+    Blender builds from the bone direction alone; the conversion then turns it
+    through float edit-bone matrices four times (roll -= delta, matrix * Rz(+/-90),
+    roll += 180, transform applies), and each pass rounds. Here the same steps
+    are done on the exact frame:
+        BP -> BF     roll = -getBpToBfRollDelta
+        BF -> UE5    * Rz(-90 if isFlipped else +90)
+        +180 roll    * Ry(180)   (X -> -X, Z -> -Z about the bone)
+    Returns {bone name: 4x4 Matrix in armature space}; pin_zero_roll_midline
+    sets them after the conversion."""
+    from .g3f import manny_blender_perfect_generated as manny_bp
+    from .tools_fix_spine_roll import MIDLINE_BONES
+
+    _enter_edit_on(armature_clone)
+    ebones = armature_clone.data.edit_bones
+    frames = {}
+    for name in MIDLINE_BONES:
+        eb = ebones.get(name)
+        delta = manny_bp.getBpToBfRollDelta(name)
+        if eb is None or delta is None or abs(eb.roll) > ZERO_ROLL_RADIANS:
+            continue
+        f = _exact_bone_frame(eb.head, eb.tail, math.radians(-delta))
+        angle = math.radians(-90.0 if manny_bp.isFlipped(name) else 90.0)
+        c, s = math.cos(angle), math.sin(angle)
+        f = [[row[0] * c + row[1] * s, -row[0] * s + row[1] * c, row[2]] for row in f]
+        f = [[-row[0], row[1], -row[2]] for row in f]
+        head = eb.head
+        frames[name] = Matrix(([f[0][0], f[0][1], f[0][2], head.x],
+                               [f[1][0], f[1][1], f[1][2], head.y],
+                               [f[2][0], f[2][1], f[2][2], head.z],
+                               [0.0, 0.0, 0.0, 1.0]))
+    bpy.ops.object.mode_set(mode='OBJECT')
+    return frames
+
+
+def pin_zero_roll_midline(armature_clone, frames):
+    """Put the frames from zero_roll_midline_frames on their bones (_set_bone_frame:
+    recorded, roll fitted; check_bone_frames fits them again before the FBX write).
+    Compares each with what the conversion made of it."""
+    if not frames:
+        print("  zero-roll midline: no spine / neck / head bone with roll 0 - left as converted")
+        return []
+    _enter_edit_on(armature_clone)
+    ebones = armature_clone.data.edit_bones
+    world3 = _rotation_3x3(armature_clone.matrix_world)
+    done = []
+    for name, matrix in frames.items():
+        eb = ebones[name]
+        converted = _angle_rows(_rows(matrix.to_3x3()), _rows(eb.matrix.to_3x3()))
+        before, after = _set_bone_frame(eb, matrix, world3)
+        done.append((name, converted, after))
+    bpy.ops.object.mode_set(mode='OBJECT')
+    print("  zero-roll midline: {} bone(s) set to their exact frame "
+          "(conversion was off by / after the fit):".format(len(done)))
+    for name, converted, after in sorted(done):
+        print("      {:<10} {:.4f} / {:.4f} deg".format(name, converted, after))
     return done
 
 
@@ -1683,7 +1913,9 @@ def sort_bones_for_export(armature_clone):
             "roll": eb.roll,
             "use_connect": eb.use_connect,
             "layers": tuple(eb.layers),
-            "props": dict((k, eb[k]) for k in eb.keys()),
+            # Arrays as plain lists: an IDPropertyArray dies with the bone it came from.
+            "props": dict((k, eb[k].to_list() if hasattr(eb[k], "to_list") else eb[k])
+                          for k in eb.keys()),
         }
         for attr in _EDIT_BONE_CARRIED_ATTRS:
             if hasattr(eb, attr):
@@ -1788,6 +2020,9 @@ def orient_bones_for_unreal_from_blender_perfect(armature_clone):
                                     borrowed donor, see ue5_convention_donors)
         4b limb IK align            thigh/calf, upperarm/lowerarm: one hinge, joint
                                     on its plane, X exact (align_limbs_for_ik)
+        4c zero-roll midline        spine / neck / head with source roll 0: the
+                                    exact frame of steps 1-4, computed in doubles
+                                    before step 1 (zero_roll_midline_frames)
         5  helper bones             the IK markers Manny has and the Daz rig does
                                     not, copied off the finished deform bones
 
@@ -1806,6 +2041,8 @@ def orient_bones_for_unreal_from_blender_perfect(armature_clone):
     donors = ue5_convention_donors(armature_clone)
     print("  UE5 donors for {} Daz extras: {}".format(
         len(donors), sorted("{}<-{}".format(k, v) for k, v in donors.items())))
+    # Read before anything rounds them (Other Fixes > Centre spine).
+    midline_frames = zero_roll_midline_frames(armature_clone)
     blender_perfect_to_blender_friendly(armature_clone, donors)
     blender_friendly_to_ue5(armature_clone, donors)
     # Last, and absolute: it overwrites whatever the two steps did to the feet.
@@ -1815,6 +2052,7 @@ def orient_bones_for_unreal_from_blender_perfect(armature_clone):
     apply_ue5_roll_correction(armature_clone)
     # Absolute frames like the feet, so after the roll correction.
     align_limbs_for_ik(armature_clone)
+    pin_zero_roll_midline(armature_clone, midline_frames)
     # Last, so the markers copy bones that are already in their final orientation
     # rather than picking up a correction meant for someone else.
     add_missing_unreal_bones(armature_clone)
@@ -2596,6 +2834,7 @@ def export_to_unreal_v2(params) : #exportfolderpath,
     # Last thing before the write, on the bones exactly as they will be exported:
     # the transform apply and the rebuild above can still move a frame.
     check_gimbal_margins(armature_clone)
+    check_bone_frames(armature_clone)
     bpy.ops.export_scene.fbx(**export_params)
 
     bpy.context.scene.unit_settings.system = 'NONE'
@@ -2796,6 +3035,7 @@ def export_animation_to_unreal(params):
     # Last thing before the write, on the bones exactly as they will be exported:
     # the transform apply and the rebuild above can still move a frame.
     check_gimbal_margins(armature_clone)
+    check_bone_frames(armature_clone)
     bpy.ops.export_scene.fbx(**export_params)
 
     bpy.context.scene.unit_settings.system = 'NONE'
