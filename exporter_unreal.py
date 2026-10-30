@@ -1585,7 +1585,10 @@ def align_limbs_for_ik(armature_clone):
                 turned.append(degrees(old[bone.name].to_quaternion().rotation_difference(
                     new_matrix.to_quaternion()).angle))
                 # Twists: back on the new line, same frame relative to the parent.
-                x = new_matrix.to_3x3().col[0]
+                # Toward the next joint, not along X: the left leg and the right arm
+                # run along -X, and their twists landed beyond the joint (2026-10-30,
+                # thigh_twist_02_l 61 cm off).
+                toward = (target - head).normalized()
                 span = (target - head).length
                 for twist_name, (parent_name, fraction) in twist_fractions.items():
                     twist = ebones.get(twist_name)
@@ -1593,7 +1596,7 @@ def align_limbs_for_ik(armature_clone):
                         continue
                     relative = old[bone.name].inverted() * old[twist.name]
                     twist_matrix = new_matrix * relative
-                    twist_matrix.translation = head + x * (span * fraction)
+                    twist_matrix.translation = head + toward * (span * fraction)
                     fits.append((twist.name, _set_bone_frame(twist, twist_matrix, world3)))
             worst_name, (worst_before, worst_after) = max(fits, key=lambda f: f[1][0])
             done.append("{}{}: joint moved {:.4f}, frames turned {:.2f} / {:.2f} deg; "
