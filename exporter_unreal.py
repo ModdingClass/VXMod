@@ -1330,6 +1330,121 @@ def reaim_feet_for_unreal(armature_clone):
     return done
 
 
+# (upper, lower, effector) per limb. The effector (foot / hand) is never touched.
+IK_LIMB_CHAINS = (('thigh', 'calf', 'foot'), ('upperarm', 'lowerarm', 'hand'))
+
+
+def align_limbs_for_ik(armature_clone):
+    """Make thigh/calf and upperarm/lowerarm sit exactly where the rig's IK puts them.
+
+    CR_Mannequin_Body solves each limb with Basic IK (SecondaryAxisWeight 1): the
+    upper bone's X aims at the joint, the lower bone's X at the effector, and both
+    bones' Y roll onto the pole, which Setup Leg / Setup Arm place on the lower
+    bone's own Y. So at rest the IK only reproduces the bind pose when
+        - each X runs exactly along the bone to the next joint, and
+        - both bones share ONE hinge Z that is normal to the plane of the three
+          joints (then both Ys lie in that plane, and the pole with them).
+    The Daz joints are not in such a plane: Bela's knee and elbow sit 0.8 cm off
+    the plane the anatomical hinge implies, and the frames were 1.2-1.6 deg off the
+    joint lines with upper/lower hinges 4-5 deg apart. The rig at rest put the
+    thigh 4.4 deg, calf 6.3 deg off the bind pose (measured 2026-10-30), arms
+    predicted 2.9 / 4.2 deg.
+
+    Per side, from the bones as they are after the UE5 passes (Blender X = UE X
+    along the bone, Blender Z = UE Z the hinge):
+        hinge   the average of the two bones' Z, made normal to the root->effector
+                line (stays anatomical: turning it onto the real joint plane would
+                be 50 deg on the nearly straight legs - knees bending sideways)
+        joint   the knee / elbow head moved onto the plane through root and
+                effector with that normal (the rest mesh does not move; only the
+                bend pivot, by that 0.8 cm)
+        frames  X exactly to the next joint (sign kept), Z = the hinge, Y = Z x X
+        twists  back on their parent's line at their dict_bones fractions, the
+                parent's new frame times their old frame relative to it
+    Foot and hand keep their world frames (the shoes' heel data is in foot space).
+
+    Runs after apply_ue5_roll_correction: the frames are absolute, like the foot
+    re-aim, and must be the final ones."""
+    from .g3f import difeomorphic_workflow_dictionaries_bones as dict_bones
+
+    twist_fractions = {}
+    for parent_name, twists, length_fraction in dict_bones.twist_bone_pairs:
+        for twist_name, head_fraction in twists:
+            twist_fractions[twist_name] = (parent_name, head_fraction)
+
+    _enter_edit_on(armature_clone)
+    ebones = armature_clone.data.edit_bones
+
+    done = []
+    for side in ('.L', '.R'):
+        for upper_base, lower_base, end_base in IK_LIMB_CHAINS:
+            upper = _find_bone(ebones, upper_base, side)
+            lower = _find_bone(ebones, lower_base, side)
+            end = _find_bone(ebones, end_base, side)
+            if upper is None or lower is None or end is None:
+                print("  limb IK align: no {}/{}/{} for {} - skipped"
+                      .format(upper_base, lower_base, end_base, side))
+                continue
+
+            root = upper.head.copy()
+            joint = lower.head.copy()
+            effector = end.head.copy()
+            old = {eb.name: eb.matrix.copy() for eb in ebones
+                   if eb.parent in (upper, lower) and eb.name in twist_fractions}
+            old[upper.name] = upper.matrix.copy()
+            old[lower.name] = lower.matrix.copy()
+
+            z_upper = old[upper.name].to_3x3().col[2]
+            z_lower = old[lower.name].to_3x3().col[2]
+            if z_upper.dot(z_lower) < 0.0:
+                z_lower = -z_lower
+            line = (effector - root).normalized()
+            hinge = z_upper + z_lower
+            hinge = (hinge - line * hinge.dot(line)).normalized()
+
+            moved = (joint - root).dot(hinge)
+            joint = joint - hinge * moved
+
+            def frame(old_matrix, head, target):
+                axes = old_matrix.to_3x3()
+                x = (target - head).normalized()
+                if x.dot(axes.col[0]) < 0.0:
+                    x = -x
+                z = hinge if hinge.dot(axes.col[2]) > 0.0 else -hinge
+                z = (z - x * z.dot(x)).normalized()
+                y = z.cross(x)
+                return Matrix(((x.x, y.x, z.x, head.x),
+                               (x.y, y.y, z.y, head.y),
+                               (x.z, y.z, z.z, head.z),
+                               (0.0, 0.0, 0.0, 1.0)))
+
+            turned = []
+            for bone, head, target in ((upper, root, joint), (lower, joint, effector)):
+                new_matrix = frame(old[bone.name], head, target)
+                bone.matrix = new_matrix
+                turned.append(degrees(old[bone.name].to_quaternion().rotation_difference(
+                    new_matrix.to_quaternion()).angle))
+                # Twists: back on the new line, same frame relative to the parent.
+                x = new_matrix.to_3x3().col[0]
+                span = (target - head).length
+                for twist_name, (parent_name, fraction) in twist_fractions.items():
+                    twist = ebones.get(twist_name)
+                    if twist is None or twist.name not in old or parent_name != bone.name:
+                        continue
+                    relative = old[bone.name].inverted() * old[twist.name]
+                    twist_matrix = new_matrix * relative
+                    twist_matrix.translation = head + x * (span * fraction)
+                    twist.matrix = twist_matrix
+            done.append("{}{}: joint moved {:.4f}, frames turned {:.2f} / {:.2f} deg"
+                        .format(upper_base, side, abs(moved), turned[0], turned[1]))
+
+    bpy.ops.object.mode_set(mode='OBJECT')
+    print("  limb IK align (armature units):")
+    for entry in done:
+        print("      " + entry)
+    return done
+
+
 # The foot tilt (FOOT_REAIM_TILT_DEGREES) puts ik_foot_l/r exactly 1 deg out, and
 # they import clean; a 0.065 deg margin failed. 0.5 leaves room on both sides.
 GIMBAL_WARN_DEGREES = 0.5
@@ -1671,6 +1786,8 @@ def orient_bones_for_unreal_from_blender_perfect(armature_clone):
         4  UE5 roll correction      +180 over EVERY bone, including the feet
                                     (the Daz extras take 1 and 2 through a
                                     borrowed donor, see ue5_convention_donors)
+        4b limb IK align            thigh/calf, upperarm/lowerarm: one hinge, joint
+                                    on its plane, X exact (align_limbs_for_ik)
         5  helper bones             the IK markers Manny has and the Daz rig does
                                     not, copied off the finished deform bones
 
@@ -1696,6 +1813,8 @@ def orient_bones_for_unreal_from_blender_perfect(armature_clone):
     # After the feet, so the correction covers them too - the legacy pass was
     # the very last thing that touched a roll, and that ordering is load bearing.
     apply_ue5_roll_correction(armature_clone)
+    # Absolute frames like the feet, so after the roll correction.
+    align_limbs_for_ik(armature_clone)
     # Last, so the markers copy bones that are already in their final orientation
     # rather than picking up a correction meant for someone else.
     add_missing_unreal_bones(armature_clone)

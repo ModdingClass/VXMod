@@ -1243,6 +1243,13 @@ In `exporter_unreal.py`, `orient_bones_for_unreal_from_blender_perfect`:
   donor conversion fixed them. `setupStomachBone` keeps a 2 deg `tilt_up_degrees` (it works there).
 - Everything built against the old extra frames in Unreal needs redoing: garments weighted to extras must be
   re-exported, Control Rigs that copy the hierarchy refreshed, bone-inverse sockets recomputed.
+- **Limbs fit the rig's IK (2026-10-30, `align_limbs_for_ik`, after the +180).** CR_Mannequin_Body's Basic IK only
+  reproduces the bind pose when thigh/calf (upperarm/lowerarm) X run exactly joint to joint and both share ONE hinge Z
+  normal to the joints' plane (the pole sits on the lower bone's Y). Bela's rig at rest was 4.4 / 6.3 deg off on the
+  legs. Per side: hinge = average Z made normal to root->effector, the knee / elbow head moved onto that plane (~0.7 /
+  0.9 cm; rest mesh unchanged), X exact, twists back on the line at their `twist_bone_pairs` fractions. Foot / hand
+  keep their world frames (heel data is foot space). Simulated exact on SK_VX_G3F's ref pose (project
+  `Tools/limb_ik_rest_sim.py`); a new bind frame means re-exporting the body and every garment on SK_VX_G3F together.
 
 ## SplitBody mode
 
