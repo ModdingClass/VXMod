@@ -65,12 +65,49 @@ def _isMoved(matrix_basis):
     return math.degrees(rot.angle) > MIN_ANGLE_DEGREES or loc.length > MIN_MOVE
 
 
+def _hasKeyAt(fcurve, frame):
+    return any(abs(k.co.x - frame) < 0.5 for k in fcurve.keyframe_points)
+
+
 def _removePoseKeys(action, frame):
-    """Every key the pose library holds at frame, so a re-load does not keep a bone the new pose left out."""
-    for fcurve in action.fcurves:
+    """Every key the pose library holds at frame, so a re-load does not keep a bone the new pose left out.
+    An F-curve left with no key at all is removed too: an empty one evaluates to 0 everywhere."""
+    for fcurve in list(action.fcurves):
         for i in reversed(range(len(fcurve.keyframe_points))):
             if abs(fcurve.keyframe_points[i].co.x - frame) < 0.5:
                 fcurve.keyframe_points.remove(fcurve.keyframe_points[i])
+        if len(fcurve.keyframe_points) == 0:
+            action.fcurves.remove(fcurve)
+
+
+def _swingOnly(armature_object, name, hh_matrix):
+    """The heeled bone's head and DIRECTION on this armature's own roll: the frame the bone would have
+    just following its already-posed parent, swung (shortest arc) onto hh_matrix's Y axis, placed at
+    hh_matrix's head.
+
+    Only head and tail of the heeled armature are its pose. Its rolls follow whatever convention the
+    rig that wrote the JSON was built with, and that need not be this armature's: measured on
+    AltaSignora_HHPose.json vs Belle (2026-11-05), ball 175 deg, toe joint01 ~180, toe joint02 45-106
+    (roll 0 there, Belle's = joint01's), upperarm 94, hand 87, eyes 90 about their own axes. Taken as
+    is, the toes twisted and bones a shoe never moves (hands, arms) were stored in the pose. A heel pose
+    never twists a bone about its own length, so the twist is dropped.
+
+    Returns (matrix, degrees of twist dropped)."""
+    bone = armature_object.data.bones[name]
+    if bone.parent is None:
+        expected = bone.matrix_local
+    else:
+        parent_posed = armature_object.pose.bones[bone.parent.name].matrix
+        expected = parent_posed * bone.parent.matrix_local.inverted() * bone.matrix_local
+    expected_rot = _rotation(expected)
+    hh_rot = _rotation(hh_matrix)
+    swing = expected_rot.col[1].rotation_difference(hh_rot.col[1]).to_matrix()
+    target_rot = swing * expected_rot
+    twist = math.degrees((target_rot.transposed() * hh_rot).to_quaternion().angle)
+    twist = min(twist, 360.0 - twist)
+    target = target_rot.to_4x4()
+    target.translation = hh_matrix.translation
+    return target, twist
 
 
 def loadHeelPoseFromJson(armature_object, filepath, pose_name):
@@ -95,11 +132,20 @@ def loadHeelPoseFromJson(armature_object, filepath, pose_name):
     levels = {}
     for bone in armature_object.data.bones:
         levels.setdefault(len(bone.parent_recursive), []).append(bone.name)
+    dropped = []
     for level in sorted(levels):
         for name in levels[level]:
             if name in hh_mats:
-                armature_object.pose.bones[name].matrix = hh_mats[name]
+                target, twist = _swingOnly(armature_object, name, hh_mats[name])
+                if twist > 1.0:
+                    dropped.append((name, twist))
+                armature_object.pose.bones[name].matrix = target
         scene.update()
+    if dropped:
+        print("Load heel pose: the JSON's roll differs from Armature's on {} bone(s) - direction taken, "
+              "twist about the bone dropped:".format(len(dropped)))
+        for name, twist in dropped:
+            print("  {:<24} {:7.2f} deg".format(name, twist))
 
     posed = []
     for pb in armature_object.pose.bones:
@@ -143,6 +189,11 @@ def readPoseLibraryPose(armature_object, pose_name):
     for fcurve in library.fcurves:
         path = fcurve.data_path
         if not path.startswith('pose.bones["'):
+            continue
+        # Only the channels keyed AT this pose's frame belong to it (that is what poselib.apply does).
+        # Any other F-curve - a bone of another pose, or one emptied by a re-load - would evaluate to
+        # someone else's value, or to 0: a scale of 0 makes the bone's matrix singular.
+        if not _hasKeyAt(fcurve, marker.frame):
             continue
         bone_name, _, prop = path[len('pose.bones["'):].partition('"].')
         channels.setdefault(bone_name, {}).setdefault(prop, {})[fcurve.array_index] = fcurve.evaluate(marker.frame)
