@@ -966,6 +966,9 @@ BODY_MARKER_PROP = "vx_body"
 VXMOD_PROP = "vxmod"
 VXMOD_KIND_PROP = "vxmod_kind"
 VXMOD_SOURCE_PROP = "vxmod_source"
+# Absolute path of the .blend the export was made from, so an asset in Unreal can be traced back to its
+# source file ("FBX.mesh_LOD<n>.vxmod_blend_file"). "<unsaved>" when the scene was never saved.
+VXMOD_BLEND_FILE_PROP = "vxmod_blend_file"
 VXMOD_KIND_BODY = "body"
 VXMOD_KIND_CLOTH = "cloth"
 ORIENTATION_BP = "BP"
@@ -2679,6 +2682,7 @@ def export_to_unreal_v2(params) : #exportfolderpath,
         lod[VXMOD_PROP] = __version__
         lod[VXMOD_KIND_PROP] = vxmodKind
         lod[VXMOD_SOURCE_PROP] = vxmodSource
+        lod[VXMOD_BLEND_FILE_PROP] = bpy.path.abspath(bpy.data.filepath) if bpy.data.filepath else "<unsaved>"
         if HEEL_POSE_PROP in lod:
             del lod[HEEL_POSE_PROP]
         if heelPoseJson:
