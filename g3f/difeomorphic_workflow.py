@@ -2232,7 +2232,8 @@ def _buildJiggleBone(mesh_object, armature_object, joint_name, end_name,
                      vertical_reach=(1.0, 1.0), lower_fullness=0.0,
                      lower_limit_indices=None, lower_limit_overshoot=1.0,
                      plateau=0.0, plateau_below=None,
-                     upper_scale=1.0, peak_depth=1.0, tilt_up_degrees=0.0):
+                     upper_scale=1.0, peak_depth=1.0, tilt_up_degrees=0.0,
+                     midline_fade=0.0, back_fade=0.0):
     """
     Build one mesh-derived jiggle bone plus its _end stub, and borrow it weight.
 
@@ -2322,6 +2323,19 @@ def _buildJiggleBone(mesh_object, armature_object, joint_name, end_name,
                   weight taken twice but credited once. Midline verts (x ~= 0) fall
                   to neither side, which is correct - the cleft should not jiggle
                   sideways.
+      midline_fade
+                  0.0 = off. Otherwise the weight eases (smoothstep) from 0 at x = 0
+                  to full at |x| = midline_fade (metres). Without it the side test
+                  is a HARD cut: at max_weight 0.85 the cleft verts held ~0.6 on
+                  two bones swinging independently, so the cleft folded into
+                  itself (overlapping faces) and a vertex on the middle landed on
+                  one side or the other (the asymmetry). VXMod 2026-11-17.
+      back_fade   0.0 = forward_only is a hard cut at the plane through the
+                  centre. Otherwise verts up to back_fade (metres) BEHIND that plane
+                  are kept too, eased (smoothstep) from full at the plane to 0. The
+                  hard cut left the glute flanks at 0.25-0.4 next to 0, which showed
+                  as corners when the bone swung. Nothing in front of the plane
+                  changes. VXMod 2026-11-17.
 
     IDEMPOTENT. Weight borrowed by an earlier run is handed back before anything is
     taken, so re-running Manny FULL neither stacks nor strands vertices that a
@@ -2561,10 +2575,23 @@ def _buildJiggleBone(mesh_object, armature_object, joint_name, end_name,
         if horizontal <= 0.0:
             continue
 
-        if forward_only and (v.co - centre).dot(axis) <= 0.0:
-            continue
+        back = 1.0
+        if forward_only:
+            depth = (v.co - centre).dot(axis)
+            if back_fade > 0.0:
+                # Behind the plane: ease to 0 over back_fade instead of cutting.
+                if depth <= -back_fade:
+                    continue
+                if depth < 0.0:
+                    b = 1.0 + depth / back_fade
+                    back = 3.0 * b * b - 2.0 * b * b * b
+            elif depth <= 0.0:
+                continue
 
-        falloff = horizontal * vertical
+        falloff = horizontal * vertical * back
+        if midline_fade > 0.0:
+            m = min(1.0, abs(v.co.x) / midline_fade)
+            falloff *= 3.0 * m * m - 2.0 * m * m * m
         if falloff <= 0.0:
             continue
         for g in v.groups:
@@ -2809,13 +2836,24 @@ def setupStomachBone(mesh_object, armature_object, parent_name="spine_02",
 def setupButtBones(mesh_object, armature_object, parent_name="pelvis",
                    source_groups=("pelvis", "thigh.{side}",
                                   "thigh_twist_01.{side}"),
-                   radius=0.22, max_weight=0.50,
+                   radius=0.22, max_weight=0.85,
                    forward_only=True, end_length=0.02,
                    vertical_reach=(0.55, 1.25), lower_fullness=0.0,
                    lower_limit_overshoot=1.55, plateau=0.20, plateau_below=0.0,
-                   upper_scale=0.55, peak_depth=0.45):
+                   upper_scale=0.55, peak_depth=0.45, midline_fade=0.03,
+                   back_fade=0.03):
     """
     Glute jiggle bones: butt_joint01.L/.R -> butt_end.L/.R, off pelvis.
+
+    midline_fade 0.03 (2026-11-17): each side's weight eases to 0 at the cleft over
+    3 cm (see _buildJiggleBone), so the cleft stays with pelvis instead of being
+    torn between two independently swinging bones. back_fade 0.03 (same day): the
+    flanks ease out over 3 cm behind the front-only plane instead of a hard cut.
+
+    max_weight 0.85 (was 0.50, 2026-11-17): at 0.50 no vertex passed 0.48 and the
+    average was ~0.2, so the glutes barely followed their jiggle bone in the game
+    (VXMod versa.SoftJiggleWeights). Mirror the final value in the Mod Kit's
+    G3F.json setupButtBones.max_weight and Tools/ModKit/bodyref/weights.py.
 
     PARENTED TO pelvis, not thigh and not spine_01. The glutes originate on the
     ilium and sacrum - they do not rotate with the femur, they are compressed and
@@ -2857,7 +2895,8 @@ def setupButtBones(mesh_object, armature_object, parent_name="pelvis",
             lower_limit_indices=crease.get(side),
             lower_limit_overshoot=lower_limit_overshoot, plateau=plateau,
             plateau_below=plateau_below,
-            upper_scale=upper_scale, peak_depth=peak_depth))
+            upper_scale=upper_scale, peak_depth=peak_depth,
+            midline_fade=midline_fade, back_fade=back_fade))
     created = [n for c, _t, _m in results for n in c]
     print("setupButtBones: {}".format(created or "nothing built"))
     return results
