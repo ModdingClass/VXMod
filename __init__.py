@@ -1708,7 +1708,7 @@ class ARMATURE_OT_Adjust_G3F_Rig_Difeomorphic(bpy.types.Operator):
         fixHeadJointsDifeomorphic("Armature")
         fixSpineJointsDifeomorphic("Armature")
         bpy.ops.object.mode_set(mode='OBJECT')
-        isCompatibleBody = check_vertices_count_of_the_body("Genesis 3 Female Mesh",17418)
+        isCompatibleBody = check_vertices_count_of_the_body(g3fBodyMeshName(),17418)
         if isCompatibleBody:
             print("body is compatible")
             ShowMessageBox("Body vertex count is OK, need to abort", "Warning", 'INFO')

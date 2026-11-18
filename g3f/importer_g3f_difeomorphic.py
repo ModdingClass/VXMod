@@ -3,6 +3,7 @@ import math
 import re
 
 from ..g3f.difeomorphic_workflow_convert_body import *
+from ..g3f.difeomorphic_workflow_g3f_lookup import *
 from ..g3f.difeomorphic_workflow_init_custom_face_indices import *
 from ..g3f.difeomorphic_workflow_init_geografts import *
 from ..tools_message_box import *
@@ -1426,19 +1427,18 @@ def sortLegacyMaterialSlots(ob):
 
 
 def convertG3FDifeomorphicToVXModFBody(material_mode='DAZSPLIT') :
-    isMyArmature = checkIfActiveObjectIs("ARMATURE","Genesis 3 Female")
-    if (isMyArmature):
-        pass
-    else:
-        ShowMessageBox("Genesis 3 Female Armature is not the active object","Error",icon="ERROR")
+    # By the Diffeomorphic Daz properties, not the name: a figure labelled "Bela" in Daz imports as "Bela" /
+    # "Bela Mesh" (difeomorphic_workflow_g3f_lookup.py, 2026-11-18).
+    activeObject = bpy.context.scene.objects.active
+    if not isG3FArmature(activeObject):
+        ShowMessageBox("Select the Genesis 3 Female armature (the Diffeomorphic import of a G3F figure, any name)","Error",icon="ERROR")
         return
     #
-    activeObject = bpy.context.scene.objects.active
-    bodyMesh = checkIfActiveObjectHasChild("MESH","Genesis 3 Female Mesh")
+    bodyMesh = findG3FBodyMesh(activeObject)
     if (bodyMesh != None):
         pass
     else:
-        ShowMessageBox("Genesis 3 Female Mesh is not a child of the active object","Error",icon="ERROR")
+        ShowMessageBox("The active armature has no Genesis 3 Female body mesh child","Error",icon="ERROR")
         return
     #
    

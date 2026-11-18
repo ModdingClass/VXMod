@@ -1,6 +1,7 @@
 import bpy
 import math
 from mathutils import Matrix
+from ..g3f.difeomorphic_workflow_g3f_lookup import *
 from mathutils import Vector
 from mathutils import Quaternion
 from ..g3f.difeomorphic_workflow_init_custom_vertex_indices import *
@@ -20,7 +21,7 @@ def getArmatureBonesDictFromBreastVertices(bones_dict):
     amw = armature_data.matrix_world
     amwi = amw.inverted()
     amwi = Matrix.Identity(4)
-    difeomorphic_body = "Genesis 3 Female Mesh"
+    difeomorphic_body = g3fBodyMeshName()
     
     #
     """                 bpy.ops.object.mode_set(mode='OBJECT')

@@ -14,6 +14,7 @@ from ..g3f.difeomorphic_workflow_dictionaries_vertex_groups import *
 from ..g3f.difeomorphic_workflow_init_custom_vertex_indices import *
 
 from ..g3f.difeomorphic_workflow_armature_utils import *
+from ..g3f.difeomorphic_workflow_g3f_lookup import *
 
 from ..g3f.difeomorphic_workflow_armature_from_gens_vertices import *
 from ..g3f.difeomorphic_workflow_armature_from_other_vertices import *
@@ -3709,7 +3710,7 @@ def alignArmatureToDifeomorphic():
     #        children = getChildren(activeObject) 
     #        extractSpecificBonesFromG3FArmatureFastVersion(activeObject.name, bones_dict)
     #        setupSpecificBonesFromG3FArmature(activeObject.name, "Armature")
-    if ("Genesis 3 Female" in activeObject.name):
+    if isG3FArmature(activeObject):   # by Daz properties, any name (2026-11-18)
             #
             # using the difeomorphic armature we extract bone's data as head, tail, roll, and we also append the roll override values to the dict items
             # this gets the data only from the original armature difeomorphic bones 
@@ -3720,7 +3721,7 @@ def alignArmatureToDifeomorphic():
             children = getChildren(activeObject) #should return main body mesh + geograft children
             for c in children: 
                 #print (c.name)
-                 if ("Genesis 3 Female Mesh" in c.name):
+                 if isG3FBodyMesh(c):
                     print("bla")
                     getArmatureBonesDictFromBreastVertices(bones_dict)
                     getArmatureBonesDictFromOtherVertices(bones_dict) # other = stomach, rib, butt joints
@@ -4405,7 +4406,7 @@ def armatureMakeFriendlyIKJoints(ob):
     list_of_bones = ["thigh","calf","foot","ball","thigh_twist_01","thigh_twist_02"]
 
 
-    difeomorphic_body = "Genesis 3 Female Mesh"
+    difeomorphic_body = g3fBodyMeshName()
     if difeomorphic_body in bpy.data.objects:
         obj = bpy.data.objects[difeomorphic_body]
         center["centerX.L"]= getCenter (knee_centerX_L, obj )[0]
@@ -4456,7 +4457,7 @@ def armatureMakeFriendlyIKJoints(ob):
     list_of_bones = ["upperarm","lowerarm","hand","upperarm_twist_01","upperarm_twist_02","lowerarm_twist_01","lowerarm_twist_02"]
 
 
-    difeomorphic_body = "Genesis 3 Female Mesh"
+    difeomorphic_body = g3fBodyMeshName()
     if difeomorphic_body in bpy.data.objects:
         obj = bpy.data.objects[difeomorphic_body]
         center["centerX.L"]= getCenter (elbow_center_L, obj )[2]
